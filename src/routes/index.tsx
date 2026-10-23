@@ -30,7 +30,9 @@ function ChatPage() {
   const [typing, setTyping] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [msgs, typing]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs, typing]);
 
   const send = (e: React.FormEvent) => {
     e.preventDefault();
