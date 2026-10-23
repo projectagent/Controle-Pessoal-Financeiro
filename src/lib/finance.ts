@@ -92,7 +92,7 @@ const KEYWORDS: [RegExp, string][] = [
 export function parseMessage(text: string): Omit<Transaction, "id"> | null {
   const m = text.match(/(\d+(?:[.,]\d{1,2})?)/);
   if (!m) return null;
-  const valor = parseFloat(m[1].replace(",", "."));
+  const valor = parseFloat((m[1] ?? "0").replace(",", "."));
   const tipo: TxType = /recebi|ganhei|sal[aá]rio|entrou|freela|vendi/i.test(text) ? "receita" : "despesa";
   const categoria = KEYWORDS.find(([r]) => r.test(text))?.[1] ?? "Outros";
   const conta = /cr[eé]dito|cart[aã]o/i.test(text) ? "Crédito" : /pix/i.test(text) ? "Pix" : /dinheiro|esp[eé]cie/i.test(text) ? "Dinheiro" : "Débito";
