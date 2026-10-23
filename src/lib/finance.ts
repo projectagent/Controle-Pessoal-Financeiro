@@ -69,7 +69,7 @@ export function removeTransaction(id: string) {
 
 export function useTransactions() {
   return useSyncExternalStore(
-    (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
+    (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
     load,
     () => EMPTY,
   );
