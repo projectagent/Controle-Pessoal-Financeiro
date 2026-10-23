@@ -127,7 +127,7 @@ const KEYWORDS: [RegExp, string][] = [
   [/aluguel|condom[ií]nio|luz|[aá]gua|internet|energia/i, "Moradia"],
   [/cinema|netflix|spotify|show|bar|viagem|jogo/i, "Lazer"],
   [/farm[aá]cia|m[eé]dico|rem[eé]dio|academia|consulta/i, "Saúde"],
-  [/roupa|amazon|loja|shopping|presente/i, "Compras"],
+  [/roupa|amazon|loja|shopping|presente|tv|celular|notebook|sof[aá]|geladeira/i, "Compras"],
   [/curso|livro|faculdade|escola/i, "Educação"],
   [/sal[aá]rio/i, "Salário"],
   [/freela|freelance|projeto/i, "Freelance"],
