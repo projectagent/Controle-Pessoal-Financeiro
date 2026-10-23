@@ -243,6 +243,13 @@ export function addTransaction(
     : gerarParcelas(installmentData, parcelas);
   const rows = generated.map((r) => ({ ...r, id: Math.random().toString(36).slice(2) }));
   save([...rows, ...load()]);
+  if (typeof window !== "undefined") {
+    api.createTransactions(rows)
+      .then(() => {
+        listeners.forEach((l) => l());
+      })
+      .catch((err) => console.warn("Failed to sync to SQLite:", err));
+  }
 }
 
 export function loadContacts(): Contact[] {
@@ -268,18 +275,27 @@ export function upsertContact(name: string, id?: string): string {
   const contacts = loadContacts();
   const duplicate = contacts.find((contact) => contact.name.toLocaleLowerCase("pt-BR") === normalizedName.toLocaleLowerCase("pt-BR"));
   if (duplicate && duplicate.id !== id) return duplicate.id;
+  const targetId = id ?? Math.random().toString(36).slice(2);
   if (id && contacts.some((contact) => contact.id === id)) {
     saveContacts(contacts.map((contact) => contact.id === id ? { ...contact, name: normalizedName } : contact));
+    if (typeof window !== "undefined") {
+      api.updateContact(id, { name: normalizedName }).catch(() => {});
+    }
     return id;
   }
-  const newId = Math.random().toString(36).slice(2);
-  saveContacts([...contacts, { id: newId, name: normalizedName }]);
-  return newId;
+  saveContacts([...contacts, { id: targetId, name: normalizedName }]);
+  if (typeof window !== "undefined") {
+    api.createContact({ id: targetId, name: normalizedName }).catch(() => {});
+  }
+  return targetId;
 }
 
 export function deleteContact(id: string): boolean {
   if (load().some((transaction) => transaction.contact_id === id)) return false;
   saveContacts(loadContacts().filter((contact) => contact.id !== id));
+  if (typeof window !== "undefined") {
+    api.deleteContact(id).catch(() => {});
+  }
   return true;
 }
 
@@ -328,12 +344,27 @@ export function useContacts() {
 }
 export function removeTransaction(id: string) {
   save(load().filter((t) => t.id !== id));
+  if (typeof window !== "undefined") {
+    api.deleteTransaction(id)
+      .then(() => { listeners.forEach((l) => l()); })
+      .catch((err) => console.warn("Failed to delete from SQLite:", err));
+  }
 }
 export function removeTransactionsByInstallmentGroupId(installmentGroupId: string) {
   save(load().filter((t) => t.installment_group_id !== installmentGroupId));
+  if (typeof window !== "undefined") {
+    api.deleteTransactionGroup(installmentGroupId)
+      .then(() => { listeners.forEach((l) => l()); })
+      .catch((err) => console.warn("Failed to delete group from SQLite:", err));
+  }
 }
 export function updateTransaction(id: string, patch: Partial<Omit<Transaction, "id">>) {
   save(load().map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  if (typeof window !== "undefined") {
+    api.updateTransaction(id, patch)
+      .then(() => { listeners.forEach((l) => l()); })
+      .catch((err) => console.warn("Failed to update in SQLite:", err));
+  }
 }
 
 export function updateTransactionsByInstallmentGroupId(installmentGroupId: string, patch: Partial<Omit<Transaction, "id">>) {
@@ -531,6 +562,9 @@ export function upsertTransactionAccount(name: string, type: TransactionAccountT
   const syncedAccounts = loadTransactionAccounts();
   if (!syncedAccounts.some((account) => account.id === id)) {
     saveTransactionAccounts([...syncedAccounts, { id, name: normalizedName, type }]);
+  }
+  if (typeof window !== "undefined") {
+    api.createAccount({ id, name: normalizedName, type }).catch(() => {});
   }
   return id;
 }

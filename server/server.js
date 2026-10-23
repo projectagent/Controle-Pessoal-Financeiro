@@ -483,16 +483,18 @@ app.get('/api/dashboard/summary', async (req, res) => {
     const month = req.query.month || new Date().toISOString().slice(0, 7);
     const monthPattern = `${month}%`;
 
-    // 1. Current balance (all time):
-    // Receitas - TODAS as Despesas (gastos de terceiros representam dinheiro que saiu da conta)
+    // 1. Current balance (all time up to today):
+    // Receitas realizadas - Despesas pessoais realizadas (date <= today OR is_paid = 1).
+    // Parcelas futuras (ex: consórcio até 2031) NUNCA devem abater o saldo de hoje!
+    const todayIso = new Date().toISOString().slice(0, 10);
     const balanceResult = await getAsync(`
       SELECT 
-        COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') THEN amount ELSE 0 END), 0) -
-        COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') THEN amount ELSE 0 END), 0) AS current_balance,
-        COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') THEN amount ELSE 0 END), 0) AS total_income_all_time,
-        COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') THEN amount ELSE 0 END), 0) AS total_expenses_all_time
+        COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') AND (date <= ? OR is_paid = 1) THEN amount ELSE 0 END), 0) -
+        COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NULL AND (date <= ? OR is_paid = 1) THEN amount ELSE 0 END), 0) AS current_balance,
+        COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') AND (date <= ? OR is_paid = 1) THEN amount ELSE 0 END), 0) AS total_income_all_time,
+        COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NULL AND (date <= ? OR is_paid = 1) THEN amount ELSE 0 END), 0) AS total_expenses_all_time
       FROM transactions
-    `);
+    `, [todayIso, todayIso, todayIso, todayIso]);
 
     // 2. Monthly aggregates:
     const monthlyResult = await getAsync(
@@ -517,26 +519,28 @@ app.get('/api/dashboard/summary', async (req, res) => {
     // 3. Category breakdown for personal expenses:
     const categoriesResult = await allAsync(
       `
-      SELECT category, SUM(amount) AS total
+      SELECT TRIM(category) AS category, SUM(amount) AS total
       FROM transactions
       WHERE (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NULL AND date LIKE ?
-      GROUP BY category
+      GROUP BY TRIM(category)
       ORDER BY total DESC
     `,
       [monthPattern]
     );
 
-    // 4. Monthly history (last 6 months):
+    // 4. Monthly history (last 6 months up to current month):
+    // Impede que parcelas futuras de 2031 poluam o histórico do gráfico
     const historyResult = await allAsync(`
       SELECT 
         SUBSTR(date, 1, 7) AS month,
         COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') THEN amount ELSE 0 END), 0) AS income,
         COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NULL THEN amount ELSE 0 END), 0) AS expense
       FROM transactions
+      WHERE SUBSTR(date, 1, 7) <= ?
       GROUP BY SUBSTR(date, 1, 7)
       ORDER BY month DESC
       LIMIT 6
-    `);
+    `, [month]);
 
     res.json({
       month,
@@ -553,6 +557,7 @@ app.get('/api/dashboard/summary', async (req, res) => {
       },
       categories: categoriesResult.map((c) => ({
         categoria: c.category,
+        category: c.category,
         total: Number(c.total),
       })),
       history: historyResult.reverse().map((h) => ({
