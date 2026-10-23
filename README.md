@@ -105,6 +105,23 @@ O comando iniciará simultaneamente:
 
 ---
 
+## 💾 Backup e Restauração dos Dados
+
+Toda a persistência da aplicação é centralizada em um banco de dados físico local, tornando o backup e a migração entre computadores extremamente simples:
+
+- **Arquivo que deve ser salvo (Backup)**:
+  `database.sqlite` *(localizado na pasta raiz do projeto)*.
+
+### Como fazer o Backup:
+1. Certifique-se de que a aplicação não está em uso no momento.
+2. Copie o arquivo `database.sqlite` para um local seguro (pendrive, nuvem, pasta de backup, etc.).
+
+### Como Restaurar:
+1. Cole o arquivo `database.sqlite` salvo de volta na pasta raiz do projeto (substituindo o arquivo atual, se houver).
+2. Inicie a aplicação via `iniciar.bat` ou `npm run dev`. Todas as suas transações, contas bancárias, cartões e contatos estarão imediatamente restaurados.
+
+---
+
 ## 🧪 Testes Automatizados
 
 O projeto conta com suíte de testes unitários e de integração utilizando **Vitest**:
