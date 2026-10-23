@@ -4,7 +4,7 @@ import { Bot, Check, Pencil, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { addTransaction, brl, CARTOES, CATEGORIAS, CONTAS, parseMessage, type Draft } from "@/lib/finance";
+import { addTransaction, brl, CATEGORIAS, CONTAS, parseMessage, type Draft, useCards } from "@/lib/finance";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -111,6 +111,8 @@ function DraftCard({ draft, status, onChange, onEdit, onConfirm }: {
   onChange: (d: Draft) => void; onEdit: () => void; onConfirm: () => void;
 }) {
   const editing = status === "editing";
+  const cards = useCards();
+  const cardName = cards.find((c) => c.id === draft.cartao)?.nome ?? draft.cartao;
   const sel = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
   return (
     <div className="w-72 rounded-xl border border-border bg-card p-4 shadow-lg">
@@ -123,13 +125,13 @@ function DraftCard({ draft, status, onChange, onEdit, onConfirm }: {
           <select className={sel} value={draft.categoria} onChange={(e) => onChange({ ...draft, categoria: e.target.value })}>
             {CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
           </select>
-          <select className={sel} value={draft.conta} onChange={(e) => onChange({ ...draft, conta: e.target.value, cartao: e.target.value === "Crédito" ? draft.cartao ?? CARTOES[0]!.nome : undefined, parcelas: e.target.value === "Crédito" ? draft.parcelas : 1 })}>
+          <select className={sel} value={draft.conta} onChange={(e) => onChange({ ...draft, conta: e.target.value, cartao: e.target.value === "Crédito" ? draft.cartao ?? cards[0]?.id : undefined, parcelas: e.target.value === "Crédito" ? draft.parcelas : 1 })}>
             {CONTAS.map((c) => <option key={c}>{c}</option>)}
           </select>
           {draft.conta === "Crédito" && (
             <>
-              <select className={sel} value={draft.cartao ?? CARTOES[0]!.nome} onChange={(e) => onChange({ ...draft, cartao: e.target.value })}>
-                {CARTOES.map((c) => <option key={c.nome}>{c.nome}</option>)}
+              <select className={sel} value={draft.cartao ?? cards[0]?.id ?? ""} onChange={(e) => onChange({ ...draft, cartao: e.target.value })}>
+                {cards.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
               </select>
               <label className="flex items-center gap-2 text-muted-foreground">Parcelas
                 <Input type="number" min={1} max={48} value={draft.parcelas} onChange={(e) => onChange({ ...draft, parcelas: Math.max(1, Math.min(48, Number(e.target.value) || 1)) })} />
@@ -145,7 +147,7 @@ function DraftCard({ draft, status, onChange, onEdit, onConfirm }: {
           <dt className="text-muted-foreground">Tipo</dt><dd className="text-right capitalize">{draft.tipo}</dd>
           <dt className="text-muted-foreground">Categoria</dt><dd className="text-right">{draft.categoria}</dd>
           <dt className="text-muted-foreground">Conta</dt><dd className="text-right">{draft.conta}</dd>
-          {draft.cartao && (<><dt className="text-muted-foreground">Cartão</dt><dd className="text-right">{draft.cartao}</dd></>)}
+          {draft.cartao && (<><dt className="text-muted-foreground">Cartão</dt><dd className="text-right">{cardName}</dd></>)}
           {draft.parcelas > 1 && (
             <>
               <dt className="text-muted-foreground">Parcelas</dt>
@@ -156,7 +158,7 @@ function DraftCard({ draft, status, onChange, onEdit, onConfirm }: {
       )}
       <div className="mt-4 flex gap-2">
         {status === "saved" ? (
-          <p className="flex items-center gap-2 text-sm text-income"><Check className="size-4" /> {draft.parcelas > 1 ? `${draft.parcelas} parcelas lançadas no ${draft.cartao}` : "Transação salva"}</p>
+          <p className="flex items-center gap-2 text-sm text-income"><Check className="size-4" /> {draft.parcelas > 1 ? `${draft.parcelas} parcelas lançadas no ${cardName}` : "Transação salva"}</p>
         ) : (
           <>
             <Button size="sm" className="flex-1" onClick={onConfirm}><Check className="size-4" /> Confirmar</Button>
