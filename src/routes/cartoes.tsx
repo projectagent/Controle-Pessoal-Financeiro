@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, CreditCard, FastForward, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,9 +12,11 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ContactPicker } from "@/components/ContactPicker";
 import {
-  brl, CATEGORIAS, cartaoDe, deleteCard, faturaAberta, faturaDe, limiteUsado, removeTransaction,
-  removeTransactionsByInstallmentGroupId, updateTransaction, updateTransactionsByInstallmentGroupId, upsertCard, useCards, useTransactions, anteciparParcelas, type Cartao, type Transaction,
+  brl, CATEGORIAS, cartaoDe, cartaoSelecionado, deleteCard, faturaAberta, faturaDe, limiteUsado, removeTransaction,
+  removeTransactionsByInstallmentGroupId, updateTransaction, updateTransactionsByInstallmentGroupId, upsertCard, useCards, useContacts, useTransactions, anteciparParcelas, type Cartao, type Transaction,
 } from "@/lib/finance";
 
 export const Route = createFileRoute("/cartoes")({
@@ -34,6 +36,7 @@ const fmt = (d: Date) => d.toLocaleDateString("pt-BR", { day: "2-digit", month: 
 function Cartoes() {
   const txs = useTransactions();
   const cards = useCards();
+  const contacts = useContacts();
   const [selId, setSelId] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [cardForm, setCardForm] = useState<Partial<Cartao> | null>(null);
@@ -41,6 +44,7 @@ function Cartoes() {
   const [txEdit, setTxEdit] = useState<Transaction | null>(null);
   const [txToDelete, setTxToDelete] = useState<Transaction | null>(null);
   const [txAntecipar, setTxAntecipar] = useState<Transaction | null>(null);
+  const [expenseFilter, setExpenseFilter] = useState<"todos" | "proprio" | "terceiros">("todos");
 
   const cartao = cards.find((c) => c.id === selId) ?? cards[0];
 
@@ -134,8 +138,13 @@ function Cartoes() {
   const aberta = mes >= faturaAberta(cartao, hoje);
 
   const itens = txs
-    .filter((t) => t.conta === "Crédito" && t.tipo === "despesa" && cartaoDe(t, cards) === cartao.id && faturaDe(t, cartao) === mes)
+    .filter((t) => t.tipo === "despesa" && cartaoSelecionado(t, cartao.id, cards) && faturaDe(t, cartao) === mes)
     .sort((a, b) => a.data.localeCompare(b.data));
+  const itensVisiveis = itens.filter((transaction) => {
+    if (expenseFilter === "proprio") return !transaction.contact_id;
+    if (expenseFilter === "terceiros") return !!transaction.contact_id;
+    return true;
+  });
   const total = itens.reduce((s, t) => s + t.valor, 0);
   const usado = limiteUsado(cartao, txs, cards, hoje);
   const disponivel = cartao.limite - usado;
@@ -213,6 +222,14 @@ function Cartoes() {
         </div>
       </div>
 
+      <Tabs value={expenseFilter} onValueChange={(value) => setExpenseFilter(value as typeof expenseFilter)}>
+        <TabsList>
+          <TabsTrigger value="todos">Todos</TabsTrigger>
+          <TabsTrigger value="proprio">Meus Gastos</TabsTrigger>
+          <TabsTrigger value="terceiros">Terceiros</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       <div className="rounded-xl border border-border bg-card">
         <Table>
           <TableHeader>
@@ -222,15 +239,16 @@ function Cartoes() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {itens.length === 0 && (
+            {itensVisiveis.length === 0 && (
               <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Nenhuma compra nesta fatura.</TableCell></TableRow>
             )}
-            {itens.map((t) => (
+            {itensVisiveis.map((t) => (
               <TableRow key={t.id}>
                 <TableCell className="text-muted-foreground">{t.data.split("-").reverse().join("/")}</TableCell>
                 <TableCell>
                   {t.descricao}
                   {t.totalParcelas && <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t.parcela}/{t.totalParcelas}</span>}
+                  {t.contact_id && <span className="ml-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-400">Para: {contacts.find((contact) => contact.id === t.contact_id)?.name ?? "Terceiro"}</span>}
                 </TableCell>
                 <TableCell>{t.categoria}</TableCell>
                 <TableCell className="text-right font-medium text-expense">{brl(t.valor)}</TableCell>
@@ -312,6 +330,7 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
   const [valor, setValor] = useState(tx.valor.toString());
   const [categoria, setCategoria] = useState(tx.categoria);
   const [aplicarGrupo, setAplicarGrupo] = useState(false);
+  const [contactId, setContactId] = useState<string | null>(tx.contact_id ?? null);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -319,10 +338,10 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
     if (!(v > 0)) { toast.error("Informe um valor maior que zero"); return; }
 
     if (tx.installment_group_id && aplicarGrupo) {
-      updateTransactionsByInstallmentGroupId(tx.installment_group_id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
+      updateTransactionsByInstallmentGroupId(tx.installment_group_id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria, contact_id: contactId, expense_owner: contactId ? "Terceiros" : "Próprio" });
       toast.success("Parcelas do grupo atualizadas");
     } else {
-      updateTransaction(tx.id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
+      updateTransaction(tx.id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria, contact_id: contactId, expense_owner: contactId ? "Terceiros" : "Próprio" });
       toast.success("Transação atualizada");
     }
 
@@ -339,6 +358,7 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
           {CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
         </select>
       </div>
+      {tx.tipo === "despesa" && <ContactPicker value={contactId} onChange={setContactId} id="edit-expense-contact" />}
       {tx.installment_group_id && (
         <label className="flex items-center gap-3 rounded-md border border-border bg-secondary/20 px-3 py-2 text-sm">
           <input type="checkbox" checked={aplicarGrupo} onChange={(e) => setAplicarGrupo(e.target.checked)} />
@@ -358,7 +378,7 @@ function AntecipacaoDialog({ tx, onClose }: { tx: Transaction | null; onClose: (
   const [quantas, setQuantas] = useState(1);
   const [valor, setValor] = useState(tx?.valor?.toString() ?? "0");
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!tx) return;
     setQuantas(1);
     setValor(tx.valor.toString());

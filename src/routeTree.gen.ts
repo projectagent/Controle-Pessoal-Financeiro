@@ -11,8 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CartoesRouteImport } from './routes/cartoes'
+import { Route as ConfiguracoesRouteImport } from './routes/configuracoes'
+import { Route as ConsorciosRouteImport } from './routes/consorcios'
+import { Route as ContasRouteImport } from './routes/contas'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ExtratoRouteImport } from './routes/extrato'
+import { Route as TerceirosRouteImport } from './routes/terceiros'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,6 +26,21 @@ const IndexRoute = IndexRouteImport.update({
 const CartoesRoute = CartoesRouteImport.update({
   id: '/cartoes',
   path: '/cartoes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConfiguracoesRoute = ConfiguracoesRouteImport.update({
+  id: '/configuracoes',
+  path: '/configuracoes',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConsorciosRoute = ConsorciosRouteImport.update({
+  id: '/consorcios',
+  path: '/consorcios',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContasRoute = ContasRouteImport.update({
+  id: '/contas',
+  path: '/contas',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -34,39 +53,85 @@ const ExtratoRoute = ExtratoRouteImport.update({
   path: '/extrato',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TerceirosRoute = TerceirosRouteImport.update({
+  id: '/terceiros',
+  path: '/terceiros',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/cartoes': typeof CartoesRoute
+  '/configuracoes': typeof ConfiguracoesRoute
+  '/consorcios': typeof ConsorciosRoute
+  '/contas': typeof ContasRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
+  '/terceiros': typeof TerceirosRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/cartoes': typeof CartoesRoute
+  '/configuracoes': typeof ConfiguracoesRoute
+  '/consorcios': typeof ConsorciosRoute
+  '/contas': typeof ContasRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
+  '/terceiros': typeof TerceirosRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/cartoes': typeof CartoesRoute
+  '/configuracoes': typeof ConfiguracoesRoute
+  '/consorcios': typeof ConsorciosRoute
+  '/contas': typeof ContasRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
+  '/terceiros': typeof TerceirosRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/cartoes' | '/dashboard' | '/extrato'
+  fullPaths:
+    | '/'
+    | '/cartoes'
+    | '/configuracoes'
+    | '/consorcios'
+    | '/contas'
+    | '/dashboard'
+    | '/extrato'
+    | '/terceiros'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/cartoes' | '/dashboard' | '/extrato'
-  id: '__root__' | '/' | '/cartoes' | '/dashboard' | '/extrato'
+  to:
+    | '/'
+    | '/cartoes'
+    | '/configuracoes'
+    | '/consorcios'
+    | '/contas'
+    | '/dashboard'
+    | '/extrato'
+    | '/terceiros'
+  id:
+    | '__root__'
+    | '/'
+    | '/cartoes'
+    | '/configuracoes'
+    | '/consorcios'
+    | '/contas'
+    | '/dashboard'
+    | '/extrato'
+    | '/terceiros'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CartoesRoute: typeof CartoesRoute
+  ConfiguracoesRoute: typeof ConfiguracoesRoute
+  ConsorciosRoute: typeof ConsorciosRoute
+  ContasRoute: typeof ContasRoute
   DashboardRoute: typeof DashboardRoute
   ExtratoRoute: typeof ExtratoRoute
+  TerceirosRoute: typeof TerceirosRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -85,6 +150,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CartoesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/configuracoes': {
+      id: '/configuracoes'
+      path: '/configuracoes'
+      fullPath: '/configuracoes'
+      preLoaderRoute: typeof ConfiguracoesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/consorcios': {
+      id: '/consorcios'
+      path: '/consorcios'
+      fullPath: '/consorcios'
+      preLoaderRoute: typeof ConsorciosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contas': {
+      id: '/contas'
+      path: '/contas'
+      fullPath: '/contas'
+      preLoaderRoute: typeof ContasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard': {
       id: '/dashboard'
       path: '/dashboard'
@@ -99,14 +185,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExtratoRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/terceiros': {
+      id: '/terceiros'
+      path: '/terceiros'
+      fullPath: '/terceiros'
+      preLoaderRoute: typeof TerceirosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CartoesRoute: CartoesRoute,
+  ConfiguracoesRoute: ConfiguracoesRoute,
+  ConsorciosRoute: ConsorciosRoute,
+  ContasRoute: ContasRoute,
   DashboardRoute: DashboardRoute,
   ExtratoRoute: ExtratoRoute,
+  TerceirosRoute: TerceirosRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,11 +1,15 @@
 import { Link } from "@tanstack/react-router";
-import { CreditCard, LayoutDashboard, MessageSquare, ReceiptText, Wallet } from "lucide-react";
+import { CreditCard, LayoutDashboard, MessageSquare, PiggyBank, ReceiptText, Settings, UsersRound, Wallet } from "lucide-react";
 
 const items = [
   { to: "/", label: "Chat", icon: MessageSquare },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/extrato", label: "Extrato", icon: ReceiptText },
+  { to: "/contas", label: "Contas", icon: Wallet },
+  { to: "/terceiros", label: "Terceiros", icon: UsersRound },
+  { to: "/consorcios", label: "Consórcios", icon: PiggyBank },
   { to: "/cartoes", label: "Cartões", icon: CreditCard },
+  { to: "/configuracoes", label: "Configurações", icon: Settings },
 ] as const;
 
 export function AppNav() {

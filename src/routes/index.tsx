@@ -1,11 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { Bot, CalendarDays, Check, CreditCard, Layers, Send, Tag, Trash2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { addTransaction, brl, extractFinancialTransactions, type StrictFinancialTransaction, useCards } from "@/lib/finance";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { ContactPicker } from "@/components/ContactPicker";
+import { TransactionAccountPicker } from "@/components/TransactionAccountPicker";
+import { addTransaction, brl, CATEGORIAS, extractFinancialTransactions, tipoDaContaTransacao, upsertContact, type StrictFinancialTransaction, useContacts, useTransactionAccounts } from "@/lib/finance";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -19,6 +24,13 @@ export const Route = createFileRoute("/")({
   component: ChatPage,
 });
 
+const EXEMPLOS = [
+  "Ifood 45 no cartão",
+  "Consórcio 552,23 12/69 parcelas",
+  "Uber 50 para o João",
+  "Netflix 45,90 assinatura",
+];
+
 type Msg =
   | { id: number; from: "user"; text: string }
   | { id: number; from: "bot"; text: string; extracted?: StrictFinancialTransaction[]; status?: "pending" | "saving" | "saved" | "discarded" };
@@ -29,7 +41,10 @@ function ChatPage() {
   ]);
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
+  const contacts = useContacts();
+  const accounts = useTransactionAccounts();
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,7 +61,7 @@ function ChatPage() {
 
     setTimeout(() => {
       setTyping(false);
-      const extraction = extractFinancialTransactions(t);
+      const extraction = extractFinancialTransactions(t, contacts, accounts);
       const valid = extraction.transactions.filter((tx) => tx.amount > 0);
 
       if (valid.length === 0) {
@@ -114,8 +129,23 @@ function ChatPage() {
         </div>
       </div>
       <form onSubmit={send} className="border-t border-border bg-background/80 p-4 backdrop-blur">
+        <div className="mx-auto mb-2 max-w-2xl">
+          <p className="text-xs text-muted-foreground">Experimente digitar:</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {EXEMPLOS.map((exemplo) => (
+              <button
+                key={exemplo}
+                type="button"
+                onClick={() => { setText(exemplo); inputRef.current?.focus(); }}
+                className="rounded-full border border-border bg-secondary/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {exemplo}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="mx-auto flex max-w-2xl gap-2">
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ex: Gastei 45 no ifood hoje no débito" className="h-11" />
+          <Input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} placeholder="Ex: Gastei 45 no ifood hoje no débito" className="h-11" />
           <Button type="submit" size="icon" className="size-11 shrink-0" aria-label="Enviar"><Send className="size-4" /></Button>
         </div>
       </form>
@@ -129,32 +159,76 @@ function ConfirmationCard({ items, status, onConfirm, onDiscard }: {
   onConfirm: () => void;
   onDiscard: () => void;
 }) {
-  const cards = useCards();
+  const accounts = useTransactionAccounts();
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(status === "saved" || status === "discarded");
+  const contacts = useContacts();
+  const [selectedAccounts, setSelectedAccounts] = useState<Record<number, string | null>>(() => {
+    const matches: Record<number, string | null> = {};
+    items.forEach((item, index) => {
+      if (!item.account_name) return;
+      const match = accounts.find((account) => account.name.toLowerCase() === item.account_name?.toLowerCase());
+      if (match) matches[index] = match.id;
+    });
+    return matches;
+  });
+  const [selectedContacts, setSelectedContacts] = useState<Record<number, string | null>>(() => {
+    const matches: Record<number, string | null> = {};
+    items.forEach((item, index) => {
+      if (item.contact_name === null) return;
+      const match = contacts.find((contact) => contact.name.toLowerCase() === item.contact_name?.toLowerCase());
+      if (match) matches[index] = match.id;
+    });
+    return matches;
+  });
+  const [selectedCategories, setSelectedCategories] = useState<Record<number, string>>({});
+  const [assetValues, setAssetValues] = useState<Record<number, string>>({});
+  const [recurringToggles, setRecurringToggles] = useState<Record<number, boolean>>({});
 
   const handleConfirm = () => {
     if (saving || done) return;
     setSaving(true);
 
-    items.forEach((item) => {
-      const normalizedAccount = item.account === "Cartão de Crédito" ? "Crédito" : item.account === "Conta Corrente" ? "Débito" : "Débito";
-      const conta = normalizedAccount === "Crédito" ? "Crédito" : "Débito";
-      const cardId = conta === "Crédito" ? cards[0]?.id : undefined;
+    items.forEach((item, index) => {
+      const explicitlySelected = Object.prototype.hasOwnProperty.call(selectedContacts, index);
+      const contactId = item.type === "EXPENSE"
+        ? (explicitlySelected
+          ? selectedContacts[index] ?? null
+          : item.contact_id ?? (item.expense_owner === "Terceiros" && item.contact_name ? upsertContact(item.contact_name) : null))
+        : null;
+      const accountId = selectedAccounts[index] ?? null;
+      const accountType = tipoDaContaTransacao(accountId);
+      const conta = accountType === "CREDIT_CARD" ? "Crédito" : accountType === "CHECKING_ACCOUNT" ? "Débito" : item.account === "Cartão de Crédito" ? "Crédito" : "Débito";
+      const cardId = accountType === "CREDIT_CARD" ? accountId ?? undefined : undefined;
       const parcelas = item.installments && item.installments > 1 ? item.installments : 1;
       const tipo = item.type === "INCOME" ? "receita" : "despesa";
+      const categoria = selectedCategories[index] ?? item.category ?? "Outros";
+      const isLongTerm = categoria === "Consórcio" || categoria === "Financiamento";
+      const isAssinatura = categoria === "Assinatura / Fixo";
+      const isRecurring = isAssinatura ? (recurringToggles[index] !== undefined ? recurringToggles[index] : (item.is_recurring ?? true)) : undefined;
+      const assetInput = Object.prototype.hasOwnProperty.call(assetValues, index)
+        ? assetValues[index]
+        : String(item.asset_value ?? "");
+      const parsedAssetValue = Number(assetInput);
 
       addTransaction(
         {
           tipo,
           valor: Number(item.amount),
-          categoria: item.category || "Outros",
+          categoria,
           conta,
           descricao: item.description,
           data: item.date || new Date().toISOString().slice(0, 10),
           cartao: cardId,
+          account_id: accountId,
+          expense_owner: contactId ? "Terceiros" : "Próprio",
+          contact_id: contactId,
+          ...(isLongTerm && Number.isFinite(parsedAssetValue) && parsedAssetValue > 0 ? { asset_value: parsedAssetValue } : {}),
+          ...(accountType === "CHECKING_ACCOUNT" && accountId ? { conta_bancaria_id: accountId } : {}),
+          ...(isAssinatura ? { is_recurring: isRecurring } : {}),
         },
         parcelas,
+        { ...(parcelas > 1 ? { parcelaInicial: item.installmentCurrent ?? 1 } : {}) },
       );
     });
 
@@ -204,11 +278,27 @@ function ConfirmationCard({ items, status, onConfirm, onDiscard }: {
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="min-w-0 rounded-lg border border-white/5 bg-white/5 p-3">
                     <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Tag className="size-3.5" /> Categoria</p>
-                    <p className="mt-1 truncate text-sm font-semibold text-white">{item.category || "Outros"}</p>
+                    <label className="mt-1 block">
+                      <span className="sr-only">Categoria do lançamento</span>
+                      <select
+                        aria-label="Categoria do lançamento"
+                        className="w-full truncate bg-transparent text-sm font-semibold text-white outline-none"
+                        value={selectedCategories[index] ?? item.category ?? "Outros"}
+                        onChange={(event) => setSelectedCategories((current) => ({ ...current, [index]: event.target.value }))}
+                      >
+                        {CATEGORIAS.map((category) => <option key={category} value={category} className="bg-zinc-950">{category}</option>)}
+                      </select>
+                    </label>
                   </div>
                   <div className="min-w-0 rounded-lg border border-white/5 bg-white/5 p-3">
-                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><CreditCard className="size-3.5" /> Conta</p>
-                    <p className="mt-1 truncate text-sm font-semibold text-white">{item.account ?? "Não informada"}</p>
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><CreditCard className="size-3.5" /> Cartão / Conta</p>
+                    <TransactionAccountPicker
+                      id={`transaction-account-${index}`}
+                      className="mt-2"
+                      value={Object.prototype.hasOwnProperty.call(selectedAccounts, index) ? selectedAccounts[index] ?? null : null}
+                      onChange={(accountId) => setSelectedAccounts((current) => ({ ...current, [index]: accountId }))}
+                      suggestedName={item.account_name}
+                    />
                   </div>
                   <div className="min-w-0 rounded-lg border border-white/5 bg-white/5 p-3">
                     <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarDays className="size-3.5" /> Data</p>
@@ -216,9 +306,51 @@ function ConfirmationCard({ items, status, onConfirm, onDiscard }: {
                   </div>
                   <div className="min-w-0 rounded-lg border border-white/5 bg-white/5 p-3">
                     <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Layers className="size-3.5" /> Parcelas</p>
-                    <p className="mt-1 text-sm font-semibold text-white">{item.installments > 1 ? `${item.installments}x` : "À vista"}</p>
+                    <p className="mt-1 text-sm font-semibold text-white">{item.installments > 1 ? `${item.installmentCurrent ?? 1}/${item.installments}` : "À vista"}</p>
                   </div>
                 </div>
+                {(selectedCategories[index] ?? item.category) && ((selectedCategories[index] ?? item.category) === "Consórcio" || (selectedCategories[index] ?? item.category) === "Financiamento") && (
+                  <div className="mt-3 grid gap-2">
+                    <label className="text-xs text-zinc-400" htmlFor={`asset-value-${index}`}>Valor da Carta / Bem (R$)</label>
+                    <Input
+                      id={`asset-value-${index}`}
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={assetValues[index] ?? String(item.asset_value ?? "")}
+                      onChange={(event) => setAssetValues((current) => ({ ...current, [index]: event.target.value }))}
+                      placeholder="Valor total do bem"
+                      className="border-white/10 bg-white/5 text-white"
+                    />
+                  </div>
+                )}
+                {(selectedCategories[index] ?? item.category) === "Assinatura / Fixo" && (
+                  <div className="mt-3 flex items-center justify-between rounded-lg border border-white/10 bg-white/5 p-3">
+                    <div className="space-y-0.5">
+                      <Label htmlFor={`recurring-toggle-${index}`} className="cursor-pointer text-sm font-medium text-white">
+                        Renovação Automática Ativa
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Lança automaticamente no início de cada mês
+                      </p>
+                    </div>
+                    <Switch
+                      id={`recurring-toggle-${index}`}
+                      checked={recurringToggles[index] !== undefined ? recurringToggles[index] : (item.is_recurring ?? true)}
+                      onCheckedChange={(checked) => setRecurringToggles((current) => ({ ...current, [index]: checked }))}
+                    />
+                  </div>
+                )}
+                {item.type === "EXPENSE" && (
+                  <div className="mt-3">
+                    <ContactPicker
+                      id={`expense-contact-${index}`}
+                      value={Object.prototype.hasOwnProperty.call(selectedContacts, index) ? selectedContacts[index] ?? null : item.contact_id ?? null}
+                      onChange={(contactId) => setSelectedContacts((current) => ({ ...current, [index]: contactId }))}
+                      suggestedName={item.contact_id ? undefined : item.contact_name ?? undefined}
+                    />
+                  </div>
+                )}
               </section>
             );
           })}
@@ -245,6 +377,11 @@ function ConfirmationCard({ items, status, onConfirm, onDiscard }: {
             {saving ? "Salvando..." : "Confirmar"}
           </Button>
         </div>
+        {accounts.length === 0 && (
+          <p className="text-center text-xs text-zinc-500">
+            Quer organizar por banco? <Link to="/contas" className="text-emerald-500 underline-offset-4 hover:underline">Cadastre uma conta</Link>.
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );
