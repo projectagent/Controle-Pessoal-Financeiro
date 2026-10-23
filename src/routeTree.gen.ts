@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CartoesRouteImport } from './routes/cartoes'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ExtratoRouteImport } from './routes/extrato'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CartoesRoute = CartoesRouteImport.update({
+  id: '/cartoes',
+  path: '/cartoes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -31,30 +37,34 @@ const ExtratoRoute = ExtratoRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/cartoes': typeof CartoesRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/cartoes': typeof CartoesRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/cartoes': typeof CartoesRoute
   '/dashboard': typeof DashboardRoute
   '/extrato': typeof ExtratoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/extrato'
+  fullPaths: '/' | '/cartoes' | '/dashboard' | '/extrato'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/extrato'
-  id: '__root__' | '/' | '/dashboard' | '/extrato'
+  to: '/' | '/cartoes' | '/dashboard' | '/extrato'
+  id: '__root__' | '/' | '/cartoes' | '/dashboard' | '/extrato'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CartoesRoute: typeof CartoesRoute
   DashboardRoute: typeof DashboardRoute
   ExtratoRoute: typeof ExtratoRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cartoes': {
+      id: '/cartoes'
+      path: '/cartoes'
+      fullPath: '/cartoes'
+      preLoaderRoute: typeof CartoesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CartoesRoute: CartoesRoute,
   DashboardRoute: DashboardRoute,
   ExtratoRoute: ExtratoRoute,
 }

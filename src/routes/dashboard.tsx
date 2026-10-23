@@ -21,7 +21,8 @@ const COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--cha
 function Dashboard() {
   const txs = useTransactions();
   const month = new Date().toISOString().slice(0, 7);
-  const saldo = txs.reduce((s, t) => s + (t.tipo === "receita" ? t.valor : -t.valor), 0);
+  const hojeIso = new Date().toISOString().slice(0, 10);
+  const saldo = txs.filter((t) => t.data <= hojeIso).reduce((s, t) => s + (t.tipo === "receita" ? t.valor : -t.valor), 0);
   const doMes = txs.filter((t) => t.data.startsWith(month));
   const receitas = doMes.filter((t) => t.tipo === "receita").reduce((s, t) => s + t.valor, 0);
   const despesas = doMes.filter((t) => t.tipo === "despesa").reduce((s, t) => s + t.valor, 0);
