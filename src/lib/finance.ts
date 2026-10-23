@@ -12,6 +12,7 @@ export interface Transaction {
   cartao?: string | undefined;
   parcela?: number;
   totalParcelas?: number;
+  installment_group_id?: string | null;
 }
 
 export interface Cartao { id: string; nome: string; limite: number; fechamento: number; vencimento: number }
@@ -46,11 +47,13 @@ export function addMonths(isoDate: string, n: number) {
 
 /** Splits a purchase into N monthly installment rows (cents distributed so they sum to the total). */
 export function gerarParcelas(t: Omit<Transaction, "id">, n: number): Omit<Transaction, "id">[] {
-  if (n <= 1) return [t];
+  if (n <= 1) return [{ ...t, installment_group_id: t.installment_group_id ?? undefined }];
+  const groupId = t.installment_group_id ?? createInstallmentGroupId();
   const cents = Math.round(t.valor * 100);
   const base = Math.floor(cents / n);
   return Array.from({ length: n }, (_, i) => ({
     ...t,
+    installment_group_id: groupId,
     valor: (base + (i === 0 ? cents - base * n : 0)) / 100,
     data: addMonths(t.data, i),
     parcela: i + 1,
@@ -109,15 +112,43 @@ function save(next: Transaction[]) {
   listeners.forEach((l) => l());
 }
 
+export function createInstallmentGroupId() {
+  return `installment-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 export function addTransaction(t: Omit<Transaction, "id">, parcelas = 1) {
-  const rows = gerarParcelas(t, parcelas).map((r) => ({ ...r, id: Math.random().toString(36).slice(2) }));
+  const groupId = parcelas > 1 ? (t.installment_group_id ?? createInstallmentGroupId()) : t.installment_group_id;
+  const rows = gerarParcelas({ ...t, installment_group_id: groupId }, parcelas).map((r) => ({ ...r, id: Math.random().toString(36).slice(2) }));
   save([...rows, ...load()]);
 }
 export function removeTransaction(id: string) {
   save(load().filter((t) => t.id !== id));
 }
+export function removeTransactionsByInstallmentGroupId(installmentGroupId: string) {
+  save(load().filter((t) => t.installment_group_id !== installmentGroupId));
+}
 export function updateTransaction(id: string, patch: Partial<Omit<Transaction, "id">>) {
   save(load().map((t) => (t.id === id ? { ...t, ...patch } : t)));
+}
+
+export function updateTransactionsByInstallmentGroupId(installmentGroupId: string, patch: Partial<Omit<Transaction, "id">>) {
+  save(load().map((t) => (t.installment_group_id === installmentGroupId ? { ...t, ...patch } : t)));
+}
+
+export function anteciparParcelas(groupId: string, count: number, valor: number, hoje = new Date()) {
+  const rows = load()
+    .filter((t) => t.installment_group_id === groupId)
+    .sort((a, b) => (a.parcela ?? 0) - (b.parcela ?? 0));
+
+  if (!rows.length) return [];
+
+  const targetCount = Math.max(0, Math.min(Math.round(count), rows.length));
+  if (!targetCount) return rows;
+
+  const targetIds = new Set(rows.slice(-targetCount).map((t) => t.id));
+  const iso = hoje.toISOString().slice(0, 10);
+  const next = load().map((t) => (targetIds.has(t.id) ? { ...t, data: iso, valor: Number.isFinite(valor) ? valor : t.valor } : t));
+  save(next);
+  return next.filter((t) => t.installment_group_id === groupId);
 }
 
 // ---- Cartões store ----
@@ -182,36 +213,165 @@ export function useTransactions() {
 
 export const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+const normalizeText = (value: string) => value
+  .toLowerCase()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
 const KEYWORDS: [RegExp, string][] = [
-  [/ifood|restaurante|lanche|almo[cç]o|jantar|mercado|padaria|pizza|caf[eé]|comida/i, "Alimentação"],
-  [/uber|99|[ôo]nibus|gasolina|combust[ií]vel|metr[ôo]|estacionamento/i, "Transporte"],
-  [/aluguel|condom[ií]nio|luz|[aá]gua|internet|energia/i, "Moradia"],
-  [/cinema|netflix|spotify|show|bar|viagem|jogo/i, "Lazer"],
-  [/farm[aá]cia|m[eé]dico|rem[eé]dio|academia|consulta/i, "Saúde"],
-  [/roupa|amazon|loja|shopping|presente|tv|celular|notebook|sof[aá]|geladeira/i, "Compras"],
-  [/curso|livro|faculdade|escola/i, "Educação"],
-  [/sal[aá]rio/i, "Salário"],
-  [/freela|freelance|projeto/i, "Freelance"],
+  [/ifood|delivery|restaurante|lanchonete|lanche|almoco|almo[cç]o|jantar|mercado|supermercado|padaria|pizza|cafe|caf[eé]|sorvete|comida|delivery/i, "Alimentação"],
+  [/uber|99|onibus|[ôo]nibus|metro|metr[ôo]|taxi|gasolina|combust[ií]vel|estacionamento|transporte|carro/i, "Transporte"],
+  [/aluguel|condom[ií]nio|luz|[aá]gua|internet|energia|iptu|moradia|apartamento|casa/i, "Moradia"],
+  [/cinema|netflix|spotify|show|bar|viagem|jogo|streaming|parque|lazer/i, "Lazer"],
+  [/farm[aá]cia|m[eé]dico|rem[eé]dio|academia|consulta|dentista|clinica|hospital|plano|psicologo|psicologa/i, "Saúde"],
+  [/roupa|amazon|loja|shopping|presente|tv|celular|notebook|sof[aá]|geladeira|eletronico|eletrodomestico|smartphone|perfume/i, "Compras"],
+  [/curso|livro|faculdade|universidade|escola|mensalidade|material escolar|apostila/i, "Educação"],
+  [/sal[aá]rio|salario|bonus|b[oó]nus/i, "Salário"],
+  [/freela|freelance|projeto|cliente/i, "Freelance"],
 ];
+
+const parseAmount = (raw: string) => {
+  const match = raw.match(/(?:r\$\s*|rs\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/i);
+  if (!match) return null;
+  const value = match[1].replace(/\./g, "").replace(",", ".");
+  return Number.parseFloat(value);
+};
 
 export type Draft = Omit<Transaction, "id"> & { parcelas: number };
 
+export type StrictTransactionType = "EXPENSE" | "INCOME" | "TRANSFER";
+export interface StrictFinancialTransaction {
+  type: StrictTransactionType;
+  amount: number;
+  description: string;
+  category: string;
+  account: string | null;
+  installments: number;
+  date: string;
+}
+export interface StrictFinancialExtraction {
+  transactions: StrictFinancialTransaction[];
+}
+
+function parseInstallments(text: string) {
+  const match = text.match(/(?:em|parcelado\s+em|em\s+|\b)(\d{1,2})\s*(?:x|vezes|parcelas)\b/i);
+  if (!match) return 1;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? Math.max(1, Math.min(48, value)) : 1;
+}
+
+function getCategoryFromText(text: string): string {
+  const normalized = normalizeText(text);
+  const mapping: [RegExp, string][] = [
+    [/ifood|delivery|restaurante|lanchonete|lanche|almoco|mercado|supermercado|padaria|pizza|cafe|sorvete|comida|pao|pão|lanche/i, "Alimentação"],
+    [/uber|99|onibus|metro|taxi|gasolina|combustivel|estacionamento|transporte|carro|carona/i, "Transporte"],
+    [/aluguel|condominio|luz|agua|internet|energia|iptu|moradia|apartamento|casa|conta de luz|condominio/i, "Moradia"],
+    [/cinema|netflix|spotify|show|bar|viagem|jogo|streaming|parque|lazer/i, "Lazer"],
+    [/farmacia|medico|remedio|academia|consulta|dentista|clinica|hospital|plano|psicologo/i, "Saúde"],
+    [/curso|livro|faculdade|universidade|escola|mensalidade|material escolar|apostila/i, "Educação"],
+    [/tenis|sapato|roupa|camisa|vestido|calca|jaqueta|casaco|loja|shopping|presente|vestuario|vestuário/i, "Vestuário"],
+    [/salario|sal[aá]rio|bonus|bônus|rendimento|ganho|salario/i, "Salário"],
+  ];
+  const match = mapping.find(([pattern]) => pattern.test(normalized));
+  return match?.[1] ?? "Outros";
+}
+
+function inferStrictType(text: string): StrictTransactionType {
+  const normalized = normalizeText(text);
+  if (/(transferi|transferencia|transferência|enviei|mandei|transfere|transferiu)/i.test(normalized)) return "TRANSFER";
+  if (/(recebi|ganhei|sal[aá]rio|salario|bonus|b[oó]nus|deposito|dep[oó]sito|reembolso|rendimento|vendi)/i.test(normalized)) return "INCOME";
+  return "EXPENSE";
+}
+
+function getStrictAccount(text: string): string | null {
+  const normalized = normalizeText(text);
+  if (/(credito|cart[aã]o|cartao)/i.test(normalized)) return "Cartão de Crédito";
+  if (/(d[eé]bito|debito|pix)/i.test(normalized)) return "Conta Corrente";
+  return null;
+}
+
+function normalizeDescription(raw: string) {
+  const withoutSignals = raw
+    .replace(/^(?:gastei|gastei\s+um|paguei|comprei|compra|recebi|ganhei|vendi|transferi|enviei|mandei)\s+/i, "")
+    .replace(/^(?:de|da|do|na|no|em|por|para|a\s+|o\s+)\s+/i, "")
+    .replace(/^(?:r\$\s*|rs\s*)/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return withoutSignals.length > 0 ? withoutSignals.charAt(0).toUpperCase() + withoutSignals.slice(1) : "Lançamento";
+}
+
+function splitIntoClauses(text: string) {
+  const segments = text
+    .split(/\s*(?:;|,|\s+e\s+|\s+e\s+|\s+\band\b\s+|\s+\bmais\b\s+)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return segments.length > 0 ? segments : [text.trim()];
+}
+
+function extractSingleTransaction(text: string): StrictFinancialTransaction | null {
+  const amountMatch = text.match(/(?:r\$\s*|rs\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/i);
+  if (!amountMatch) return null;
+
+  const rawAmount = amountMatch[1].replace(/\./g, "").replace(",", ".");
+  const amount = Number.parseFloat(rawAmount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const description = normalizeDescription(text.replace(amountMatch[0], "").trim());
+  if (!description || description === "Lançamento") return null;
+
+  const type = inferStrictType(text);
+  const date = /ontem/i.test(text) ? new Date(Date.now() - 86400000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+  return {
+    type,
+    amount,
+    description,
+    category: getCategoryFromText(text),
+    account: getStrictAccount(text),
+    installments: parseInstallments(text),
+    date,
+  };
+}
+
+export function extractFinancialTransactions(text: string): StrictFinancialExtraction {
+  const clauses = splitIntoClauses(text);
+  const transactions = clauses
+    .map((clause) => extractSingleTransaction(clause))
+    .filter((item): item is StrictFinancialTransaction => item !== null);
+
+  if (transactions.length === 0) {
+    return { transactions: [{
+      type: "EXPENSE",
+      amount: 0,
+      description: "Lançamento",
+      category: "Outros",
+      account: null,
+      installments: 1,
+      date: new Date().toISOString().slice(0, 10),
+    }] };
+  }
+
+  return { transactions };
+}
+
 export function parseMessage(text: string): Draft | null {
-  const parc = text.match(/(?:em|parcelado em)\s+(\d{1,2})\s*(?:x|vezes|parcelas)?/i);
-  const parcelas = parc && /vezes|parcel|\dx/i.test(text) ? Math.max(1, Math.min(48, Number(parc[1]))) : 1;
-  const clean = parc && parcelas > 1 ? text.replace(parc[0], " ") : text;
-  const m = clean.match(/(\d+(?:[.,]\d{1,2})?)/);
-  if (!m) return null;
-  const valor = parseFloat((m[1] ?? "0").replace(",", "."));
-  const tipo: TxType = /recebi|ganhei|sal[aá]rio|entrou|freela|vendi/i.test(text) ? "receita" : "despesa";
-  const categoria = KEYWORDS.find(([r]) => r.test(text))?.[1] ?? "Outros";
-  let conta = /cr[eé]dito|cart[aã]o/i.test(text) ? "Crédito" : /pix/i.test(text) ? "Pix" : /dinheiro|esp[eé]cie/i.test(text) ? "Dinheiro" : "Débito";
+  const normalized = normalizeText(text);
+  const parc = normalized.match(/(?:em|parcelado\s+em)\s+(\d{1,2})\s*(?:x|vezes|parcelas)?|\b(\d{1,2})\s*(?:x|vezes|parcelas)\b/i);
+  const parcelas = parc ? Math.max(1, Math.min(48, Number(parc[1] ?? parc[2]))) : 1;
+  const clean = parc && parcelas > 1 ? normalized.replace(parc[0], " ") : normalized;
+  const valor = parseAmount(clean) ?? parseAmount(text) ?? 0;
+  if (!valor) return null;
+  const tipo: TxType = /(recebi|ganhei|sal[aá]rio|salario|entrou|freela|vendi|deposito|dep[oó]sito|transfer[eê]ncia|reembolso|bonus|b[oó]nus|rendimentos)/i.test(normalized) ? "receita" : "despesa";
+  const categoria = KEYWORDS.find(([r]) => r.test(normalized))?.[1] ?? "Outros";
+  let conta = /cr[eé]dito|cart[aã]o|credito|cartao/i.test(normalized) ? "Crédito" : /pix/i.test(normalized) ? "Pix" : /dinheiro|esp[eé]cie/i.test(normalized) ? "Dinheiro" : "Débito";
   if (parcelas > 1) conta = "Crédito";
   const cards = loadCards();
   const cartao = conta === "Crédito"
-    ? (cards.find((c) => text.toLowerCase().includes(c.nome.toLowerCase().replace(/^cart[aã]o\s+/, ""))) ?? cards[0])?.id
+    ? (cards.find((c) => normalized.includes(c.nome.toLowerCase().replace(/^cart[aã]o\s+/, ""))) ?? cards[0])?.id
     : undefined;
-  const data = iso(/ontem/i.test(text) ? 1 : 0);
-  const descricao = text.length > 60 ? text.slice(0, 57) + "..." : text;
+  const data = iso(/ontem/i.test(normalized) ? 1 : 0);
+  const descricao = text.trim().length > 60 ? text.trim().slice(0, 57) + "..." : text.trim();
   return { tipo, valor, categoria, conta, descricao, data, cartao, parcelas };
 }

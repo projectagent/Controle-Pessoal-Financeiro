@@ -7,9 +7,9 @@ import { brl, META_GASTOS, useTransactions } from "@/lib/finance";
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
     meta: [
-      { title: "Dashboard — FalaGrana" },
+      { title: "Dashboard — Controle Financeiro Pessoal" },
       { name: "description", content: "Saldo, receitas, despesas e gastos por categoria." },
-      { property: "og:title", content: "Dashboard — FalaGrana" },
+      { property: "og:title", content: "Dashboard — Controle Financeiro Pessoal" },
       { property: "og:description", content: "Saldo, receitas, despesas e gastos por categoria." },
     ],
   }),

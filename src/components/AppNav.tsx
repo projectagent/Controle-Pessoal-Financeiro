@@ -15,7 +15,7 @@ export function AppNav() {
         <span className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">
           <Wallet className="size-4" />
         </span>
-        <span className="font-display text-lg font-semibold tracking-tight">Fala<span className="text-primary">Grana</span></span>
+        <span className="font-display text-lg font-semibold tracking-tight">Controle <span className="text-primary">Financeiro Pessoal</span></span>
       </div>
       {items.map(({ to, label, icon: Icon }) => (
         <Link

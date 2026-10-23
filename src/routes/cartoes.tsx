@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, CreditCard, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, CreditCard, FastForward, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,15 +14,15 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   brl, CATEGORIAS, cartaoDe, deleteCard, faturaAberta, faturaDe, limiteUsado, removeTransaction,
-  updateTransaction, upsertCard, useCards, useTransactions, type Cartao, type Transaction,
+  removeTransactionsByInstallmentGroupId, updateTransaction, updateTransactionsByInstallmentGroupId, upsertCard, useCards, useTransactions, anteciparParcelas, type Cartao, type Transaction,
 } from "@/lib/finance";
 
 export const Route = createFileRoute("/cartoes")({
   head: () => ({
     meta: [
-      { title: "Cartões — FalaGrana" },
+      { title: "Cartões — Controle Financeiro Pessoal" },
       { name: "description", content: "Faturas e limites dos seus cartões de crédito, com parcelas organizadas por mês." },
-      { property: "og:title", content: "Cartões — FalaGrana" },
+      { property: "og:title", content: "Cartões — Controle Financeiro Pessoal" },
       { property: "og:description", content: "Faturas e limites dos seus cartões de crédito, com parcelas organizadas por mês." },
     ],
   }),
@@ -39,6 +39,8 @@ function Cartoes() {
   const [cardForm, setCardForm] = useState<Partial<Cartao> | null>(null);
   const [toDelete, setToDelete] = useState<Cartao | null>(null);
   const [txEdit, setTxEdit] = useState<Transaction | null>(null);
+  const [txToDelete, setTxToDelete] = useState<Transaction | null>(null);
+  const [txAntecipar, setTxAntecipar] = useState<Transaction | null>(null);
 
   const cartao = cards.find((c) => c.id === selId) ?? cards[0];
 
@@ -78,6 +80,37 @@ function Cartoes() {
         </AlertDialogContent>
       </AlertDialog>
       <TxDialog tx={txEdit} onClose={() => setTxEdit(null)} />
+      <AntecipacaoDialog tx={txAntecipar} onClose={() => setTxAntecipar(null)} />
+      <AlertDialog open={!!txToDelete} onOpenChange={(o) => !o && setTxToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{txToDelete?.installment_group_id ? "Excluir compra parcelada?" : "Excluir transação?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {txToDelete?.installment_group_id
+                ? "Esta é uma compra parcelada. Deseja excluir todas as parcelas vinculadas a esta compra?"
+                : "Essa ação não pode ser desfeita."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!txToDelete) return;
+                if (txToDelete.installment_group_id) {
+                  removeTransactionsByInstallmentGroupId(txToDelete.installment_group_id);
+                  toast.success("Compra parcelada excluída com sucesso!");
+                } else {
+                  removeTransaction(txToDelete.id);
+                  toast.success("Transação excluída");
+                }
+                setTxToDelete(null);
+              }}
+            >
+              {txToDelete?.installment_group_id ? "Excluir todas as parcelas" : "Excluir"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 
@@ -203,7 +236,12 @@ function Cartoes() {
                 <TableCell className="text-right font-medium text-expense">{brl(t.valor)}</TableCell>
                 <TableCell className="text-right">
                   <Button variant="ghost" size="icon" aria-label="Editar transação" onClick={() => setTxEdit(t)}><Pencil className="size-4 text-muted-foreground" /></Button>
-                  <Button variant="ghost" size="icon" aria-label="Excluir transação" onClick={() => { removeTransaction(t.id); toast.success("Transação excluída"); }}>
+                  {t.installment_group_id && (
+                    <Button variant="ghost" size="icon" aria-label="Antecipar parcela" onClick={() => setTxAntecipar(t)}>
+                      <FastForward className="size-4 text-muted-foreground" />
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="icon" aria-label="Excluir transação" onClick={() => setTxToDelete(t)}>
                     <Trash2 className="size-4 text-muted-foreground" />
                   </Button>
                 </TableCell>
@@ -273,14 +311,24 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
   const [descricao, setDescricao] = useState(tx.descricao);
   const [valor, setValor] = useState(tx.valor.toString());
   const [categoria, setCategoria] = useState(tx.categoria);
+  const [aplicarGrupo, setAplicarGrupo] = useState(false);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const v = Number(valor);
     if (!(v > 0)) { toast.error("Informe um valor maior que zero"); return; }
-    updateTransaction(tx.id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
-    toast.success("Transação atualizada");
+
+    if (tx.installment_group_id && aplicarGrupo) {
+      updateTransactionsByInstallmentGroupId(tx.installment_group_id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
+      toast.success("Parcelas do grupo atualizadas");
+    } else {
+      updateTransaction(tx.id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
+      toast.success("Transação atualizada");
+    }
+
     onDone();
   };
+
   return (
     <form onSubmit={submit} className="grid gap-4">
       <div className="grid gap-2"><Label htmlFor="t-desc">Descrição</Label><Input id="t-desc" value={descricao} onChange={(e) => setDescricao(e.target.value)} /></div>
@@ -291,7 +339,73 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
           {CATEGORIAS.map((c) => <option key={c}>{c}</option>)}
         </select>
       </div>
+      {tx.installment_group_id && (
+        <label className="flex items-center gap-3 rounded-md border border-border bg-secondary/20 px-3 py-2 text-sm">
+          <input type="checkbox" checked={aplicarGrupo} onChange={(e) => setAplicarGrupo(e.target.checked)} />
+          <span>Aplicar a todas as parcelas deste grupo</span>
+        </label>
+      )}
       <DialogFooter><Button type="submit">Salvar</Button></DialogFooter>
     </form>
+  );
+}
+
+function AntecipacaoDialog({ tx, onClose }: { tx: Transaction | null; onClose: () => void }) {
+  const rows = useTransactions().filter((item) => item.installment_group_id === tx?.installment_group_id);
+  const maxParcelas = tx?.installment_group_id
+    ? Math.max(1, rows.filter((item) => (item.parcela ?? 0) >= (tx.parcela ?? 1)).length)
+    : 1;
+  const [quantas, setQuantas] = useState(1);
+  const [valor, setValor] = useState(tx?.valor?.toString() ?? "0");
+
+  React.useEffect(() => {
+    if (!tx) return;
+    setQuantas(1);
+    setValor(tx.valor.toString());
+  }, [tx]);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tx?.installment_group_id) return;
+
+    const count = Math.max(1, Math.min(Number(quantas) || 1, maxParcelas));
+    const novoValor = Number(valor);
+
+    if (!(novoValor > 0)) {
+      toast.error("Informe um valor maior que zero");
+      return;
+    }
+
+    anteciparParcelas(tx.installment_group_id, count, novoValor, new Date());
+    toast.success("Parcelas antecipadas com sucesso!");
+    onClose();
+  };
+
+  return (
+    <Dialog open={!!tx} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Antecipar parcelas</DialogTitle>
+        </DialogHeader>
+        {tx && (
+          <form onSubmit={submit} className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="antecipar-qtd">Quantas parcelas (de trás para frente) deseja antecipar?</Label>
+              <Input id="antecipar-qtd" type="number" min={1} max={maxParcelas} value={quantas} onChange={(e) => setQuantas(Number(e.target.value) || 1)} />
+              <span className="text-xs text-muted-foreground">Máximo: {maxParcelas} parcelas restantes</span>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="antecipar-valor">Valor da parcela com desconto/acréscimo</Label>
+              <Input id="antecipar-valor" type="number" step="0.01" min="0" value={valor} onChange={(e) => setValor(e.target.value)} />
+            </div>
+
+            <DialogFooter>
+              <Button type="submit">Confirmar antecipação</Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

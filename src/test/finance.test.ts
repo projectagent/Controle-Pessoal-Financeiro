@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addTransaction, deleteCard, gerarParcelas, limiteUsado, loadCards, parseMessage, upsertCard, type Cartao } from "@/lib/finance";
+import { addTransaction, anteciparParcelas, deleteCard, extractFinancialTransactions, gerarParcelas, limiteUsado, loadCards, parseMessage, updateTransactionsByInstallmentGroupId, upsertCard, type Cartao } from "@/lib/finance";
 
 describe("parcelamento", () => {
   it("detecta 'em 10 vezes' e força crédito", () => {
@@ -13,11 +13,37 @@ describe("parcelamento", () => {
     expect(parseMessage("Gastei 300 no sofá parcelado em 3")!.parcelas).toBe(3);
   });
 
+  it("classifica transferências recebidas como receita", () => {
+    const d = parseMessage("Recebi R$ 1200 por transferência")!;
+    expect(d.tipo).toBe("receita");
+    expect(d.categoria).toBe("Outros");
+  });
+
+  it("categorizza gastos em farmácia como saúde", () => {
+    const d = parseMessage("Paguei R$ 89,90 na farmácia")!;
+    expect(d.tipo).toBe("despesa");
+    expect(d.categoria).toBe("Saúde");
+  });
+
   it("gera X linhas em meses seguintes somando o total", () => {
     const rows = gerarParcelas({ tipo: "despesa", valor: 100, categoria: "Compras", conta: "Crédito", descricao: "x", data: "2026-01-31" }, 3);
     expect(rows.map((r) => r.data)).toEqual(["2026-01-31", "2026-02-28", "2026-03-31"]);
     expect(rows.map((r) => `${r.parcela}/${r.totalParcelas}`)).toEqual(["1/3", "2/3", "3/3"]);
     expect(rows.reduce((s, r) => s + r.valor, 0)).toBeCloseTo(100);
+  });
+});
+
+describe("extração estrita de lançamentos", () => {
+  it("separa múltiplos gastos em um único texto", () => {
+    const result = extractFinancialTransactions("gastei 20 de pão e 50 de uber");
+    expect(result.transactions).toHaveLength(2);
+    expect(result.transactions[0]).toMatchObject({ type: "EXPENSE", amount: 20, category: "Alimentação", description: "Pão" });
+    expect(result.transactions[1]).toMatchObject({ type: "EXPENSE", amount: 50, category: "Transporte", description: "Uber" });
+  });
+
+  it("detecta transferências e conta pelo método informado", () => {
+    const result = extractFinancialTransactions("transferi 1200 para a conta do aluguel em 3x");
+    expect(result.transactions[0]).toMatchObject({ type: "TRANSFER", amount: 1200, installments: 3, account: null });
   });
 });
 
@@ -45,5 +71,37 @@ describe("exclusão de cartão", () => {
     upsertCard({ nome: "Vazio", limite: 500, fechamento: 1, vencimento: 10 });
     const vazio = loadCards().find((k) => k.nome === "Vazio")!;
     expect(deleteCard(vazio.id)).toBe(true);
+  });
+});
+
+describe("parcelas em grupo", () => {
+  it("atualiza todos os itens de um mesmo grupo ao editar em massa", () => {
+    const groupId = "group-update-test";
+    addTransaction({ tipo: "despesa", valor: 200, categoria: "Compras", conta: "Crédito", cartao: "principal", descricao: "Notebook", data: "2026-01-15", installment_group_id: groupId }, 3);
+
+    updateTransactionsByInstallmentGroupId(groupId, { categoria: "Eletrônicos", descricao: "Monitor", valor: 450 });
+
+    const rows = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]").filter((t: any) => t.installment_group_id === groupId);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((t: any) => t.categoria === "Eletrônicos")).toBe(true);
+    expect(rows.every((t: any) => t.descricao === "Monitor")).toBe(true);
+    expect(rows.every((t: any) => t.valor === 450)).toBe(true);
+  });
+
+  it("antecipa as últimas parcelas do grupo e atualiza valor e data", () => {
+    const groupId = "group-advance-test";
+    const base = { tipo: "despesa" as const, categoria: "Compras", conta: "Crédito", cartao: "principal", descricao: "Notebook", data: "2026-01-15", installment_group_id: groupId };
+    addTransaction(base, 4);
+
+    const rowsBefore = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]").filter((t: any) => t.installment_group_id === groupId).sort((a: any, b: any) => a.parcela - b.parcela);
+    const current = rowsBefore[rowsBefore.length - 1];
+    const today = new Date();
+
+    anteciparParcelas(groupId, 2, 350, today);
+
+    const rowsAfter = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]").filter((t: any) => t.installment_group_id === groupId).sort((a: any, b: any) => a.parcela - b.parcela);
+    expect(rowsAfter.slice(-2).every((t: any) => t.data === today.toISOString().slice(0, 10))).toBe(true);
+    expect(rowsAfter.slice(-2).every((t: any) => t.valor === 350)).toBe(true);
+    expect(current.parcela).toBe(4);
   });
 });

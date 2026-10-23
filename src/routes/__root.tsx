@@ -80,10 +80,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "FalaGrana — Controle financeiro conversacional" },
+      { title: "Controle Financeiro Pessoal" },
       { name: "description", content: "Controle suas finanças pessoais conversando." },
       { name: "author", content: "Lovable" },
-      { property: "og:title", content: "FalaGrana — Controle financeiro conversacional" },
+      { property: "og:title", content: "Controle Financeiro Pessoal" },
       { property: "og:description", content: "Controle suas finanças pessoais conversando." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
