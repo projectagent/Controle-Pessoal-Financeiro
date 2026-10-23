@@ -36,7 +36,7 @@ function Extrato() {
             {txs.map((t) => (
               <TableRow key={t.id}>
                 <TableCell className="text-muted-foreground">{t.data.split("-").reverse().join("/")}</TableCell>
-                <TableCell>{t.descricao}</TableCell>
+                <TableCell>{t.descricao}{t.totalParcelas && <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-xs text-muted-foreground">{t.parcela}/{t.totalParcelas}</span>}</TableCell>
                 <TableCell>{t.categoria}</TableCell>
                 <TableCell className="text-muted-foreground">{t.conta}</TableCell>
                 <TableCell className={`text-right font-medium ${t.tipo === "receita" ? "text-income" : "text-expense"}`}>

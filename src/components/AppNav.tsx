@@ -1,10 +1,11 @@
 import { Link } from "@tanstack/react-router";
-import { LayoutDashboard, MessageSquare, ReceiptText, Wallet } from "lucide-react";
+import { CreditCard, LayoutDashboard, MessageSquare, ReceiptText, Wallet } from "lucide-react";
 
 const items = [
   { to: "/", label: "Chat", icon: MessageSquare },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/extrato", label: "Extrato", icon: ReceiptText },
+  { to: "/cartoes", label: "Cartões", icon: CreditCard },
 ] as const;
 
 export function AppNav() {
