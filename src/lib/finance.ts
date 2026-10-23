@@ -9,7 +9,7 @@ export interface Transaction {
   conta: string;
   descricao: string;
   data: string; // ISO yyyy-mm-dd
-  cartao?: string;
+  cartao?: string | undefined;
   parcela?: number;
   totalParcelas?: number;
 }
