@@ -14,12 +14,18 @@ export interface Transaction {
   totalParcelas?: number;
 }
 
-export interface Cartao { nome: string; fechamento: number; vencimento: number; final: string }
-export const CARTOES: Cartao[] = [
-  { nome: "Cartão Principal", fechamento: 5, vencimento: 12, final: "4821" },
-  { nome: "Cartão Viagem", fechamento: 20, vencimento: 28, final: "7730" },
+export interface Cartao { id: string; nome: string; limite: number; fechamento: number; vencimento: number }
+const CARDS_KEY = "fin-cartoes-v1";
+const seedCards = (): Cartao[] => [
+  { id: "principal", nome: "Cartão Principal", limite: 8000, fechamento: 5, vencimento: 12 },
+  { id: "viagem", nome: "Cartão Viagem", limite: 5000, fechamento: 20, vencimento: 28 },
 ];
-export const cartaoDe = (t: Transaction) => t.cartao ?? CARTOES[0]!.nome;
+
+/** Card id a credit transaction belongs to (accepts legacy name references; no card => "principal"). */
+export function cartaoDe(t: Transaction, cards: Cartao[] = loadCards()) {
+  if (!t.cartao) return "principal";
+  return cards.find((c) => c.id === t.cartao || c.nome === t.cartao)?.id ?? t.cartao;
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 export const ym = (y: number, m: number) => `${y}-${pad(m + 1)}`; // m 0-based
@@ -75,8 +81,8 @@ function seed(): Transaction[] {
     { id: "s5", tipo: "despesa", valor: 150, categoria: "Transporte", conta: "Débito", descricao: "Combustível", data: iso(4) },
     { id: "s6", tipo: "receita", valor: 900, categoria: "Freelance", conta: "Pix", descricao: "Projeto freelance", data: iso(3) },
     { id: "s7", tipo: "despesa", valor: 210, categoria: "Saúde", conta: "Débito", descricao: "Farmácia", data: iso(2) },
-    ...gerarParcelas({ tipo: "despesa", valor: 2400, categoria: "Compras", conta: "Crédito", cartao: "Cartão Principal", descricao: "Notebook", data: iso(20) }, 10).map((t, i) => ({ ...t, id: `s9-${i}` })),
-    { id: "s10", tipo: "despesa", valor: 640, categoria: "Lazer", conta: "Crédito", cartao: "Cartão Viagem", descricao: "Passagem aérea", data: iso(6) },
+    ...gerarParcelas({ tipo: "despesa", valor: 2400, categoria: "Compras", conta: "Crédito", cartao: "principal", descricao: "Notebook", data: iso(20) }, 10).map((t, i) => ({ ...t, id: `s9-${i}` })),
+    { id: "s10", tipo: "despesa", valor: 640, categoria: "Lazer", conta: "Crédito", cartao: "viagem", descricao: "Passagem aérea", data: iso(6) },
     { id: "s8", tipo: "despesa", valor: 330, categoria: "Compras", conta: "Crédito", descricao: "Roupas", data: iso(1) },
   ];
 }
@@ -109,6 +115,61 @@ export function addTransaction(t: Omit<Transaction, "id">, parcelas = 1) {
 }
 export function removeTransaction(id: string) {
   save(load().filter((t) => t.id !== id));
+}
+export function updateTransaction(id: string, patch: Partial<Omit<Transaction, "id">>) {
+  save(load().map((t) => (t.id === id ? { ...t, ...patch } : t)));
+}
+
+// ---- Cartões store ----
+let cardsCache: Cartao[] | null = null;
+const EMPTY_CARDS: Cartao[] = [];
+export function loadCards(): Cartao[] {
+  if (cardsCache) return cardsCache;
+  try {
+    const raw = localStorage.getItem(CARDS_KEY);
+    cardsCache = raw ? JSON.parse(raw) : seedCards();
+    if (!raw) localStorage.setItem(CARDS_KEY, JSON.stringify(cardsCache));
+  } catch {
+    cardsCache = seedCards();
+  }
+  return cardsCache!;
+}
+function saveCards(next: Cartao[]) {
+  cardsCache = next;
+  localStorage.setItem(CARDS_KEY, JSON.stringify(next));
+  listeners.forEach((l) => l());
+}
+export function upsertCard(c: Omit<Cartao, "id"> & { id?: string }) {
+  const cards = loadCards();
+  if (c.id && cards.some((x) => x.id === c.id)) saveCards(cards.map((x) => (x.id === c.id ? { ...x, ...c, id: x.id } : x)));
+  else saveCards([...cards, { ...c, id: Math.random().toString(36).slice(2) }]);
+}
+/** Returns false (and does nothing) when the card still has linked transactions. */
+export function deleteCard(id: string): boolean {
+  const cards = loadCards();
+  if (load().some((t) => t.conta === "Crédito" && cartaoDe(t, cards) === id)) return false;
+  saveCards(cards.filter((c) => c.id !== id));
+  return true;
+}
+export function useCards() {
+  return useSyncExternalStore(
+    (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+    loadCards,
+    () => EMPTY_CARDS,
+  );
+}
+
+/** Invoice month that is currently open for a card. */
+export function faturaAberta(c: Cartao, hoje = new Date()) {
+  const d = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() > c.fechamento ? 1 : 0), 1);
+  return ym(d.getFullYear(), d.getMonth());
+}
+/** Used limit = open invoice + all future installments on this card. */
+export function limiteUsado(c: Cartao, txs: Transaction[], cards: Cartao[], hoje = new Date()) {
+  const aberta = faturaAberta(c, hoje);
+  return txs
+    .filter((t) => t.conta === "Crédito" && t.tipo === "despesa" && cartaoDe(t, cards) === c.id && faturaDe(t, c) >= aberta)
+    .reduce((s, t) => s + t.valor, 0);
 }
 
 export function useTransactions() {
@@ -146,7 +207,10 @@ export function parseMessage(text: string): Draft | null {
   const categoria = KEYWORDS.find(([r]) => r.test(text))?.[1] ?? "Outros";
   let conta = /cr[eé]dito|cart[aã]o/i.test(text) ? "Crédito" : /pix/i.test(text) ? "Pix" : /dinheiro|esp[eé]cie/i.test(text) ? "Dinheiro" : "Débito";
   if (parcelas > 1) conta = "Crédito";
-  const cartao = conta === "Crédito" ? (/viagem/i.test(text) ? "Cartão Viagem" : CARTOES[0]!.nome) : undefined;
+  const cards = loadCards();
+  const cartao = conta === "Crédito"
+    ? (cards.find((c) => text.toLowerCase().includes(c.nome.toLowerCase().replace(/^cart[aã]o\s+/, ""))) ?? cards[0])?.id
+    : undefined;
   const data = iso(/ontem/i.test(text) ? 1 : 0);
   const descricao = text.length > 60 ? text.slice(0, 57) + "..." : text;
   return { tipo, valor, categoria, conta, descricao, data, cartao, parcelas };
