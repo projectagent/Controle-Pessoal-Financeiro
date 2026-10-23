@@ -237,9 +237,9 @@ function CardForm({ initial, onDone }: { initial: Partial<Cartao>; onDone: (id?:
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const l = Number(limite), f = Number(fech), v = Number(venc);
-    if (!nome.trim()) return toast.error("Informe o nome do cartão");
-    if (!(l > 0)) return toast.error("Informe um limite maior que zero");
-    if (![f, v].every((d) => Number.isInteger(d) && d >= 1 && d <= 31)) return toast.error("Dias devem estar entre 1 e 31");
+    if (!nome.trim()) { toast.error("Informe o nome do cartão"); return; }
+    if (!(l > 0)) { toast.error("Informe um limite maior que zero"); return; }
+    if (![f, v].every((d) => Number.isInteger(d) && d >= 1 && d <= 31)) { toast.error("Dias devem estar entre 1 e 31"); return; }
     upsertCard({ ...(initial.id ? { id: initial.id } : {}), nome: nome.trim(), limite: l, fechamento: f, vencimento: v });
     toast.success(initial.id ? "Cartão atualizado" : "Cartão criado");
     onDone(initial.id);
@@ -276,7 +276,7 @@ function TxForm({ tx, onDone }: { tx: Transaction; onDone: () => void }) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const v = Number(valor);
-    if (!(v > 0)) return toast.error("Informe um valor maior que zero");
+    if (!(v > 0)) { toast.error("Informe um valor maior que zero"); return; }
     updateTransaction(tx.id, { descricao: descricao.trim() || tx.descricao, valor: v, categoria });
     toast.success("Transação atualizada");
     onDone();
