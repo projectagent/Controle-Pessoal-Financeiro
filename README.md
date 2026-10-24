@@ -2,24 +2,35 @@
 
 Aplicativo desktop/local de gestão financeira pessoal com arquitetura cliente-servidor e banco de dados SQLite físico. Focado no controle rigoroso de fluxo de caixa, isolamento estrito de gastos realizados para terceiros (evitando distorções no saldo pessoal), acompanhamento de consórcios/financiamentos de longo prazo e renovação automática de despesas recorrentes e assinaturas.
 
+> 🤖 **Metodologia de Desenvolvimento — 100% Vibe Code com Prompts Estruturados**  
+> Este projeto foi concebido, arquitetado e implementado integralmente através de **Vibe Coding utilizando Prompts Estruturados**. Todas as regras de negócio financeiras, modelagem SQL, rotas de API, componentes de interface e testes automatizados foram construídos por meio de especificações técnicas detalhadas, engenharia de contexto e iterações orientadas por IA.
+
 ---
 
 ## 🛠️ Tecnologias Utilizadas
 
 ### Frontend
-- **React 19** com **TypeScript**
-- **Vite** (Build tool e servidor de desenvolvimento rápido)
-- **TanStack Router** (Roteamento baseado em arquivos com tipagem estrita)
-- **Tailwind CSS** com componentes acessíveis baseados em **Radix UI**
+- **React 19** (`^19.2.0`) com **TypeScript 5.8**
+- **Vite 8** (Build tool e bundler de alta performance)
+- **TanStack Start & TanStack Router** (Roteamento file-based com tipagem estrita)
+- **TanStack React Query v5** (Gerenciamento de estado assíncrono e cache de dados)
+- **Tailwind CSS v4** (`@tailwindcss/vite` e `tw-animate-css`) para estilização utilitária moderna
+- **Radix UI & shadcn/ui** (`class-variance-authority`, `clsx`, `tailwind-merge`, `vaul`, `cmdk`) para componentes acessíveis e interativos
+- **React Hook Form + Zod** (`@hookform/resolvers`) para validação e controle de formulários com esquemas tipados
 - **Recharts** (Gráficos visuais de despesas por categoria e evolução histórica)
-- **Lucide React** (Ícones da interface)
-- **Sonner** (Notificações toast)
+- **date-fns v4 & React Day Picker** (Manipulação de datas e seletores de calendário)
+- **Lucide React** (Ícones da interface) e **Sonner** (Notificações toast)
 
 ### Backend & Armazenamento
-- **Node.js** com **Express** (API REST rodando na porta `3001`)
-- **SQLite 3** (`database.sqlite` na raiz do projeto) com integridade referencial ativa (`PRAGMA foreign_keys = ON`)
-- **CORS** para integração entre frontend e backend
-- **Concurrently** para inicialização paralela e automatizada dos serviços
+- **Node.js** (ES Modules) com **Express 5** (`^5.3.0`) servindo a API REST na porta `3001`
+- **SQLite 3** (`^6.0.1` — arquivo `database.sqlite` na raiz do projeto) com integridade referencial ativa (`PRAGMA foreign_keys = ON`)
+- **CORS** para integração segura entre frontend e backend
+- **Concurrently** para orquestração e inicialização paralela dos servidores (`SERVER` e `CLIENT`)
+
+### Qualidade de Código, Testes & Metodologia
+- **Vibe Coding & Engenharia de Prompts Estruturados** (Desenvolvimento 100% guiado por IA com prompts arquiteturais e funcionais estruturados)
+- **Vitest 4** + **Testing Library** (`@testing-library/react`, `@testing-library/jest-dom`, `jsdom`) para testes unitários e de integração
+- **ESLint 9** + **Prettier** para padronização e formatação estática de código
 
 ---
 
