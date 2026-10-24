@@ -80,8 +80,14 @@ function Dashboard() {
     ? sqlSummary.monthly.personal_expenses
     : despesasPessoais.reduce((s, t) => s + t.valor, 0);
 
-  // 4. Total a Receber de Terceiros: all-time pending receivables from third parties (never zeroed out by month)
-  const aReceber = isSqlSynced && (sqlSummary as any)?.total_a_receber_geral !== undefined
+  // 4. Repasse de Terceiros: valor mensal (do mês selecionado) e valor total acumulado (geral)
+  const aReceberMes = isSqlSynced && sqlSummary?.monthly?.third_party_pending !== undefined
+    ? Number(sqlSummary.monthly.third_party_pending)
+    : doMes
+        .filter((t) => t.tipo === "despesa" && (Boolean(t.contact_id) || t.expense_owner === "Terceiros") && !t.is_paid)
+        .reduce((s, t) => s + t.valor, 0);
+
+  const aReceberTotal = isSqlSynced && (sqlSummary as any)?.total_a_receber_geral !== undefined
     ? Number((sqlSummary as any).total_a_receber_geral)
     : txs
         .filter((t) => t.tipo === "despesa" && (Boolean(t.contact_id) || t.expense_owner === "Terceiros") && !t.is_paid)
@@ -131,11 +137,25 @@ function Dashboard() {
     setLimitDialogOpen(false);
   };
 
-  const cards = [
+  const cards: Array<{
+    label: string;
+    value: number;
+    secondaryLabel?: string;
+    secondaryValue?: number;
+    icon: typeof Wallet;
+    cls: string;
+  }> = [
     { label: "Saldo Atual", value: saldo, icon: Wallet, cls: "text-foreground" },
     { label: "Receitas do Mês", value: receitas, icon: ArrowUpRight, cls: "text-income" },
     { label: "Despesas do Mês", value: despesas, icon: ArrowDownRight, cls: "text-expense" },
-    { label: "Total a Receber de Terceiros", value: aReceber, icon: UsersRound, cls: "text-amber-500" },
+    {
+      label: "Repasse de Terceiros (Mês)",
+      value: aReceberMes,
+      secondaryLabel: "Total acumulado",
+      secondaryValue: aReceberTotal,
+      icon: UsersRound,
+      cls: "text-amber-500",
+    },
   ];
 
   return (
@@ -167,13 +187,19 @@ function Dashboard() {
 
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map(({ label, value, icon: Icon, cls }) => (
+        {cards.map(({ label, value, secondaryLabel, secondaryValue, icon: Icon, cls }) => (
           <div key={label} className="rounded-xl border border-border bg-card p-5">
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               {label}
               <Icon className={`size-4 ${cls}`} />
             </div>
-            <p className={`mt-3 font-display text-2xl font-semibold ${cls}`}>{brl(value)}</p>
+            <p className={`mt-3 font-display text-2xl font-semibold tabular-nums ${cls}`}>{brl(value)}</p>
+            {secondaryLabel && secondaryValue !== undefined && (
+              <div className="mt-2 flex items-center justify-between border-t border-border/60 pt-2 text-xs text-muted-foreground">
+                <span>{secondaryLabel}</span>
+                <span className="font-semibold tabular-nums text-foreground">{brl(secondaryValue)}</span>
+              </div>
+            )}
           </div>
         ))}
       </div>
