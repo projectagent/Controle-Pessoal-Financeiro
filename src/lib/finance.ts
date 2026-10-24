@@ -213,6 +213,21 @@ function save(next: Transaction[]) {
   listeners.forEach((l) => l());
 }
 
+/**
+ * Cartões criados na tela de Cartões só existiam no navegador. Como a transação referencia
+ * account_id (FOREIGN KEY), o servidor recusava o lançamento e ele ficava só no localStorage.
+ * Garante que as contas/cartões usados existam no SQLite antes de gravar.
+ */
+async function ensureAccountsOnServer(accountIds: Array<string | null | undefined>) {
+  const ids = [...new Set(accountIds.filter((id): id is string => !!id))];
+  if (!ids.length) return;
+  const known = loadTransactionAccounts();
+  for (const id of ids) {
+    const account = known.find((item) => item.id === id);
+    if (account) await api.createAccount({ id, name: account.name, type: account.type }).catch(() => {});
+  }
+}
+
 export function createInstallmentGroupId() {
   return `installment-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -244,7 +259,8 @@ export function addTransaction(
   const rows = generated.map((r) => ({ ...r, id: Math.random().toString(36).slice(2) }));
   save([...rows, ...load()]);
   if (typeof window !== "undefined") {
-    api.createTransactions(rows)
+    ensureAccountsOnServer(rows.map((row) => row.account_id))
+      .then(() => api.createTransactions(rows))
       .then(() => {
         listeners.forEach((l) => l());
       })
@@ -1132,6 +1148,12 @@ export async function initFinanceApiSync() {
     ]);
 
     if (Array.isArray(apiAccounts)) {
+      const serverAccountIds = new Set(apiAccounts.map((a) => a.id));
+      for (const local of loadTransactionAccounts()) {
+        if (!serverAccountIds.has(local.id)) {
+          await api.createAccount({ id: local.id, name: local.name, type: local.type }).then(() => apiAccounts.push({ id: local.id, name: local.name, type: local.type })).catch(() => {});
+        }
+      }
       transactionAccountsCache = apiAccounts.map((a) => ({ id: a.id, name: a.name, type: a.type }));
       localStorage.setItem(TRANSACTION_ACCOUNTS_KEY, JSON.stringify(transactionAccountsCache));
     }
