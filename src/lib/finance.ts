@@ -379,6 +379,24 @@ export function updateTransactionsByInstallmentGroupId(installmentGroupId: strin
   }
 }
 
+/**
+ * Redefine a data da primeira parcela de um plano (consórcio/financiamento) e reagenda
+ * todas as demais mensalmente a partir dela, respeitando a ordem das parcelas.
+ */
+export function redatarPlano(ids: string[], primeiraData: string) {
+  const rows = load()
+    .filter((t) => ids.includes(t.id))
+    .sort((a, b) => (a.parcela ?? 0) - (b.parcela ?? 0) || a.data.localeCompare(b.data));
+  if (!rows.length || !/^\d{4}-\d{2}-\d{2}$/.test(primeiraData)) return;
+  const novaData = new Map(rows.map((t, i) => [t.id, addMonths(primeiraData, i)]));
+  save(load().map((t) => (novaData.has(t.id) ? { ...t, data: novaData.get(t.id)! } : t)));
+  if (typeof window !== "undefined") {
+    Promise.all([...novaData].map(([id, data]) => api.updateTransaction(id, { data, date: data })))
+      .then(() => { listeners.forEach((l) => l()); })
+      .catch((err) => console.warn("Failed to redate plan in SQLite:", err));
+  }
+}
+
 export interface LongTermPlanSummary {
   parcelaAtual: number;
   totalParcelas: number;
@@ -1122,26 +1140,9 @@ export async function initFinanceApiSync() {
       localStorage.setItem(CONTACTS_KEY, JSON.stringify(contactsCache));
     }
     if (Array.isArray(apiTxs)) {
-      const local = load();
-      if (local.length > 0 && apiTxs.length > 0) {
-        const serverIds = new Set(apiTxs.map((t) => t.id));
-        const missingOnServer = local.filter((t) => !serverIds.has(t.id));
-        if (missingOnServer.length > 0) {
-          await api.createTransactions(missingOnServer).catch(() => {});
-        }
-        const localContactMap = new Map(local.filter((t) => t.contact_id).map((t) => [t.id, t.contact_id]));
-        for (const st of apiTxs) {
-          if (!st.contact_id && localContactMap.has(st.id)) {
-            const cid = localContactMap.get(st.id);
-            await api.updateTransaction(st.id, { contact_id: cid }).catch(() => {});
-            (st as any).contact_id = cid;
-          }
-        }
-      } else if (local.length > 0 && apiTxs.length === 0) {
-        await api.createTransactions(local).catch(() => {});
-      }
-      const finalTxs = await api.getTransactions().catch(() => apiTxs);
-      cache = finalTxs as unknown as Transaction[];
+      // O servidor (SQLite) é a fonte da verdade: nunca reenviar dados locais, senão itens
+      // apagados no banco seriam ressuscitados a partir do localStorage do navegador.
+      cache = apiTxs as unknown as Transaction[];
       localStorage.setItem(KEY, JSON.stringify(cache));
     }
     listeners.forEach((l) => l());

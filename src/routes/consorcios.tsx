@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { brl, CATEGORIAS, anteciparParcelas, resumirPlanoLongoPrazo, toggleTransactionPaid, updateTransaction, updateTransactionsByInstallmentGroupId, useTransactions, type Transaction } from "@/lib/finance";
+import { brl, CATEGORIAS, anteciparParcelas, resumirPlanoLongoPrazo, toggleTransactionPaid, updateTransaction, updateTransactionsByInstallmentGroupId, redatarPlano, useTransactions, type Transaction } from "@/lib/finance";
 
 export const Route = createFileRoute("/consorcios")({
   head: () => ({
@@ -233,6 +233,9 @@ function EditPlanForm({ plan, onClose }: { plan: Plano; onClose: () => void }) {
   const [valor, setValor] = useState(String(initial.valor));
   const [assetValue, setAssetValue] = useState(initial.asset_value == null ? "" : String(initial.asset_value));
   const [categoria, setCategoria] = useState(initial.categoria);
+  const ordered = [...plan.transactions].sort((a, b) => (a.parcela ?? 0) - (b.parcela ?? 0) || a.data.localeCompare(b.data));
+  const dataOriginal = ordered[0].data;
+  const [primeiraData, setPrimeiraData] = useState(dataOriginal);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -243,6 +246,7 @@ function EditPlanForm({ plan, onClose }: { plan: Plano; onClose: () => void }) {
     const assetPatch = assetValue.trim() && Number.isFinite(parsedAssetValue) && parsedAssetValue > 0 ? { asset_value: parsedAssetValue } : {};
     if (plan.groupId) updateTransactionsByInstallmentGroupId(plan.groupId, { ...patch, ...assetPatch });
     else updateTransaction(initial.id, { ...patch, ...assetPatch });
+    if (primeiraData && primeiraData !== dataOriginal) redatarPlano(plan.transactions.map((t) => t.id), primeiraData);
     toast.success("Contrato atualizado");
     onClose();
   };
@@ -253,6 +257,11 @@ function EditPlanForm({ plan, onClose }: { plan: Plano; onClose: () => void }) {
       <div className="grid gap-2"><Label htmlFor="plan-installment">Valor unitário da parcela (R$)</Label><Input id="plan-installment" type="number" min="0.01" step="0.01" value={valor} onChange={(event) => setValor(event.target.value)} /></div>
       <div className="grid gap-2"><Label htmlFor="plan-asset-value">Valor da Carta / Bem (R$)</Label><Input id="plan-asset-value" type="number" min="0.01" step="0.01" value={assetValue} onChange={(event) => setAssetValue(event.target.value)} placeholder="Opcional" /></div>
       <div className="grid gap-2"><Label htmlFor="plan-category">Categoria</Label><select id="plan-category" className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={categoria} onChange={(event) => setCategoria(event.target.value)}>{CATEGORIAS.filter((item) => item === "Consórcio" || item === "Financiamento").map((item) => <option key={item}>{item}</option>)}</select></div>
+      <div className="grid gap-2">
+        <Label htmlFor="plan-first-date">Data da primeira parcela{ordered[0].parcela ? ` (parcela ${ordered[0].parcela})` : ""}</Label>
+        <Input id="plan-first-date" type="date" value={primeiraData} onChange={(event) => setPrimeiraData(event.target.value)} />
+        <span className="text-xs text-muted-foreground">Ao alterar, as {ordered.length} parcelas são reagendadas mês a mês a partir desta data.</span>
+      </div>
       <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar contrato</Button></DialogFooter>
     </form>
   );

@@ -8,6 +8,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Testes NUNCA podem gravar no banco real (database.sqlite): aponta a API para uma porta morta.
+    env: { VITE_API_URL: "http://127.0.0.1:9" },
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
   resolve: {
