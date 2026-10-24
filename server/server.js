@@ -375,6 +375,44 @@ app.delete('/api/transactions/:id', async (req, res) => {
   }
 });
 
+
+// Update an entire group of installments
+app.put('/api/transactions/group/:installment_group_id', async (req, res) => {
+  try {
+    const { installment_group_id } = req.params;
+    const { description, descricao, amount, valor, category, categoria, contact_id } = req.body;
+    const fields = [];
+    const params = [];
+
+    if (description || descricao) {
+      fields.push('description = ?');
+      params.push((description || descricao).trim());
+    }
+    if (amount !== undefined || valor !== undefined) {
+      fields.push('amount = ?');
+      params.push(Number(amount ?? valor));
+    }
+    if (category || categoria) {
+      fields.push('category = ?');
+      params.push((category || categoria).trim());
+    }
+    if (contact_id !== undefined) {
+      fields.push('contact_id = ?');
+      params.push(contact_id || null);
+    }
+
+    if (fields.length > 0) {
+      params.push(installment_group_id);
+      await runAsync('UPDATE transactions SET ' + fields.join(', ') + ' WHERE installment_group_id = ?', params);
+    }
+
+    const rows = await allAsync('SELECT * FROM transactions WHERE installment_group_id = ?', [installment_group_id]);
+    res.json(rows.map(serializeTransaction));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Delete an entire group of installments (consortium / financing)
 app.delete('/api/transactions/group/:installment_group_id', async (req, res) => {
   try {

@@ -181,6 +181,12 @@ export const api = {
     });
   },
 
+    async updateTransactionGroup(groupId: string, patch: any): Promise<ApiTransaction[]> {
+    return request<ApiTransaction[]>('/api/transactions/group/' + groupId, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    });
+  },
   async deleteTransactionGroup(groupId: string): Promise<{ success: boolean; changes: number }> {
     return request<{ success: boolean; changes: number }>(`/api/transactions/group/${groupId}`, {
       method: 'DELETE',

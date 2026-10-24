@@ -299,12 +299,15 @@ export function deleteContact(id: string): boolean {
   return true;
 }
 
-export function totalAReceberGeral(contacts: Contact[] | Contact, transactions: Transaction[]): number {
-  const list = Array.isArray(contacts) ? contacts : [contacts];
-  const contactIds = new Set(list.map((c) => c.id));
+export function totalAReceberGeral(contacts?: Contact[] | Contact | null, transactions: Transaction[] = load()): number {
+  if (contacts && !Array.isArray(contacts)) {
+    return transactions
+      .filter((t) => t.tipo === "despesa" && t.contact_id === contacts.id && !t.is_paid)
+      .reduce((sum, t) => sum + Number(t.valor), 0);
+  }
   return transactions
-    .filter((transaction) => transaction.tipo === "despesa" && transaction.contact_id && contactIds.has(transaction.contact_id) && !transaction.is_paid)
-    .reduce((sum, transaction) => sum + transaction.valor, 0);
+    .filter((t) => t.tipo === "despesa" && (Boolean(t.contact_id) || t.expense_owner === "Terceiros") && !t.is_paid)
+    .reduce((sum, t) => sum + Number(t.valor), 0);
 }
 
 export function totalAReceberMes(
@@ -369,6 +372,11 @@ export function updateTransaction(id: string, patch: Partial<Omit<Transaction, "
 
 export function updateTransactionsByInstallmentGroupId(installmentGroupId: string, patch: Partial<Omit<Transaction, "id">>) {
   save(load().map((t) => (t.installment_group_id === installmentGroupId ? { ...t, ...patch } : t)));
+  if (typeof window !== "undefined") {
+    api.updateTransactionGroup(installmentGroupId, patch)
+      .then(() => { listeners.forEach((l) => l()); })
+      .catch((err) => console.warn("Failed to update group in SQLite:", err));
+  }
 }
 
 export interface LongTermPlanSummary {
@@ -1114,7 +1122,26 @@ export async function initFinanceApiSync() {
       localStorage.setItem(CONTACTS_KEY, JSON.stringify(contactsCache));
     }
     if (Array.isArray(apiTxs)) {
-      cache = apiTxs as unknown as Transaction[];
+      const local = load();
+      if (local.length > 0 && apiTxs.length > 0) {
+        const serverIds = new Set(apiTxs.map((t) => t.id));
+        const missingOnServer = local.filter((t) => !serverIds.has(t.id));
+        if (missingOnServer.length > 0) {
+          await api.createTransactions(missingOnServer).catch(() => {});
+        }
+        const localContactMap = new Map(local.filter((t) => t.contact_id).map((t) => [t.id, t.contact_id]));
+        for (const st of apiTxs) {
+          if (!st.contact_id && localContactMap.has(st.id)) {
+            const cid = localContactMap.get(st.id);
+            await api.updateTransaction(st.id, { contact_id: cid }).catch(() => {});
+            (st as any).contact_id = cid;
+          }
+        }
+      } else if (local.length > 0 && apiTxs.length === 0) {
+        await api.createTransactions(local).catch(() => {});
+      }
+      const finalTxs = await api.getTransactions().catch(() => apiTxs);
+      cache = finalTxs as unknown as Transaction[];
       localStorage.setItem(KEY, JSON.stringify(cache));
     }
     listeners.forEach((l) => l());

@@ -80,10 +80,12 @@ function Dashboard() {
     ? sqlSummary.monthly.personal_expenses
     : despesasPessoais.reduce((s, t) => s + t.valor, 0);
 
-  // 4. Total a Receber de Terceiros: strictly within selected month
-  const aReceber = isSqlSynced
-    ? sqlSummary.monthly.third_party_pending
-    : doMes.filter((t) => t.tipo === "despesa" && !!t.contact_id && !t.is_paid).reduce((s, t) => s + t.valor, 0);
+  // 4. Total a Receber de Terceiros: all-time pending receivables from third parties (never zeroed out by month)
+  const aReceber = isSqlSynced && (sqlSummary as any)?.total_a_receber_geral !== undefined
+    ? Number((sqlSummary as any).total_a_receber_geral)
+    : txs
+        .filter((t) => t.tipo === "despesa" && (Boolean(t.contact_id) || t.expense_owner === "Terceiros") && !t.is_paid)
+        .reduce((s, t) => s + t.valor, 0);
 
   // 5. Recent transactions strictly within selected month
   const recentes = doMes
