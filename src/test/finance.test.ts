@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resumoMensalSeparado, agruparPorDia, deslocarMes, resumoMensal, transacoesDoMes, calcularSaldoAtual, addTransaction, anteciparParcelas, cancelarRenovacaoAssinatura, CATEGORIAS, deleteCard, extractFinancialTransactions, gerarParcelas, gerarParcelasUnitarias, limiteUsado, loadCards, loadFinanceSettings, loadTransactionAccounts, parseMessage, processarRecorrencias, reativarRenovacaoAssinatura, resumirPlanoLongoPrazo, toggleTransactionPaid, totalAReceber, totalAReceberGeral, totalAReceberMes, updateMonthlySpendingLimit, updateTransactionsByInstallmentGroupId, upsertCard, upsertTransactionAccount, type Cartao } from "@/lib/finance";
+import { faturaDe, faturaAberta, resumoMensalSeparado, agruparPorDia, deslocarMes, resumoMensal, transacoesDoMes, calcularSaldoAtual, addTransaction, anteciparParcelas, cancelarRenovacaoAssinatura, CATEGORIAS, deleteCard, extractFinancialTransactions, gerarParcelas, gerarParcelasUnitarias, limiteUsado, loadCards, loadFinanceSettings, loadTransactionAccounts, parseMessage, processarRecorrencias, reativarRenovacaoAssinatura, resumirPlanoLongoPrazo, toggleTransactionPaid, totalAReceber, totalAReceberGeral, totalAReceberMes, updateMonthlySpendingLimit, updateTransactionsByInstallmentGroupId, upsertCard, upsertTransactionAccount, type Cartao, type Transaction } from "@/lib/finance";
 
 describe("parcelamento", () => {
   it("detecta 'em 10 vezes' e força crédito", () => {
@@ -594,5 +594,365 @@ describe("transações recentes do dashboard com isolamento mensal", () => {
     expect(recentes[0].id).toBe("7");
     // Segundo mais recente: id: 3 (2026-10-20)
     expect(recentes[1].id).toBe("3");
+  });
+});
+
+describe("agrupamento por mês de referência (mesReferencia)", () => {
+  const cartaoFechamento5: Cartao = {
+    id: "c_test_5",
+    nome: "Cartão Teste Fechamento 5",
+    limite: 10000,
+    fechamento: 5,
+    vencimento: 15,
+  };
+
+  const cartaoBissexto: Cartao = {
+    id: "c_test_29",
+    nome: "Cartão Bissexto",
+    limite: 5000,
+    fechamento: 29,
+    vencimento: 10,
+  };
+
+  describe("faturaDe - regra de fechamento (d >= c.fechamento)", () => {
+    it("atribui ao mês corrente quando a data da transação for anterior ao fechamento (d < closing_day)", () => {
+      const tx: Transaction = {
+        id: "tx-before",
+        tipo: "despesa",
+        valor: 150,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Compra antes do fechamento",
+        data: "2026-10-04",
+      };
+      expect(faturaDe(tx, cartaoFechamento5)).toBe("2026-10");
+    });
+
+    it("atribui ao próximo mês quando a data da transação for exatamente no dia de fechamento (d == closing_day)", () => {
+      const tx: Transaction = {
+        id: "tx-on-closing",
+        tipo: "despesa",
+        valor: 200,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Compra no dia do fechamento",
+        data: "2026-10-05",
+      };
+      expect(faturaDe(tx, cartaoFechamento5)).toBe("2026-11");
+    });
+
+    it("atribui ao próximo mês quando a data da transação for posterior ao fechamento (d > closing_day)", () => {
+      const tx: Transaction = {
+        id: "tx-after-closing",
+        tipo: "despesa",
+        valor: 350,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Compra após o fechamento",
+        data: "2026-10-20",
+      };
+      expect(faturaDe(tx, cartaoFechamento5)).toBe("2026-11");
+    });
+
+    it("realiza virada de ano corretamente para compras em dezembro no ou após o fechamento", () => {
+      const txAnoRollover: Transaction = {
+        id: "tx-dec-after",
+        tipo: "despesa",
+        valor: 500,
+        categoria: "Lazer",
+        conta: "Crédito",
+        descricao: "Ceia de Fim de Ano",
+        data: "2026-12-05",
+      };
+      expect(faturaDe(txAnoRollover, cartaoFechamento5)).toBe("2027-01");
+
+      const txDezembroAberto: Transaction = {
+        id: "tx-dec-before",
+        tipo: "despesa",
+        valor: 250,
+        categoria: "Lazer",
+        conta: "Crédito",
+        descricao: "Presente Natal Antecipado",
+        data: "2026-12-04",
+      };
+      expect(faturaDe(txDezembroAberto, cartaoFechamento5)).toBe("2026-12");
+    });
+
+    it("lida corretamente com anos bissextos e fechamentos no dia 29", () => {
+      const tx28: Transaction = {
+        id: "tx-bis-28",
+        tipo: "despesa",
+        valor: 100,
+        categoria: "Outros",
+        conta: "Crédito",
+        descricao: "Antes do dia 29 em bissexto",
+        data: "2024-02-28",
+      };
+      expect(faturaDe(tx28, cartaoBissexto)).toBe("2024-02");
+
+      const tx29: Transaction = {
+        id: "tx-bis-29",
+        tipo: "despesa",
+        valor: 100,
+        categoria: "Outros",
+        conta: "Crédito",
+        descricao: "No dia 29 em bissexto",
+        data: "2024-02-29",
+      };
+      expect(faturaDe(tx29, cartaoBissexto)).toBe("2024-03");
+    });
+  });
+
+  describe("faturaAberta - regra de fechamento no cálculo da fatura aberta do cartão", () => {
+    it("mantém mês atual antes do fechamento e avança no dia e após o fechamento", () => {
+      const antes = new Date(2026, 9, 4); // 4 de outubro de 2026
+      const noDia = new Date(2026, 9, 5); // 5 de outubro de 2026
+      const depois = new Date(2026, 9, 20); // 20 de outubro de 2026
+
+      expect(faturaAberta(cartaoFechamento5, antes)).toBe("2026-10");
+      expect(faturaAberta(cartaoFechamento5, noDia)).toBe("2026-11");
+      expect(faturaAberta(cartaoFechamento5, depois)).toBe("2026-11");
+    });
+  });
+
+  describe("transacoesDoMes - isolamento por mesReferencia", () => {
+    it("filtra estritamente pelo mesReferencia em vez da data de criação", () => {
+      const txs: Transaction[] = [
+        {
+          id: "t1",
+          tipo: "despesa",
+          valor: 100,
+          categoria: "Compras",
+          conta: "Crédito",
+          descricao: "Compra cartão 25/10 com fatura em Nov",
+          data: "2026-10-25",
+          mesReferencia: "2026-11",
+        },
+        {
+          id: "t2",
+          tipo: "despesa",
+          valor: 80,
+          categoria: "Alimentação",
+          conta: "Débito",
+          descricao: "Almoço em Outubro",
+          data: "2026-10-10",
+          mesReferencia: "2026-10",
+        },
+        {
+          id: "t3",
+          tipo: "despesa",
+          valor: 200,
+          categoria: "Moradia",
+          conta: "Boleto",
+          descricao: "Aluguel pago adiantado",
+          data: "2026-09-30",
+          mesReferencia: "2026-10",
+        },
+      ];
+
+      const out = transacoesDoMes(txs, "2026-10");
+      expect(out.map((t) => t.id)).toEqual(["t2", "t3"]);
+      expect(out.some((t) => t.id === "t1")).toBe(false);
+
+      const nov = transacoesDoMes(txs, "2026-11");
+      expect(nov.map((t) => t.id)).toEqual(["t1"]);
+    });
+
+    it("faz fallback para data.slice(0, 7) quando mesReferencia não estiver definido", () => {
+      const legacyTxs: Transaction[] = [
+        {
+          id: "leg1",
+          tipo: "despesa",
+          valor: 50,
+          categoria: "Transporte",
+          conta: "Pix",
+          descricao: "Sem mesReferencia",
+          data: "2026-10-12",
+        },
+        {
+          id: "leg2",
+          tipo: "despesa",
+          valor: 60,
+          categoria: "Transporte",
+          conta: "Pix",
+          descricao: "Sem mesReferencia em Novembro",
+          data: "2026-11-03",
+        },
+      ];
+
+      const out = transacoesDoMes(legacyTxs, "2026-10");
+      expect(out.map((t) => t.id)).toEqual(["leg1"]);
+    });
+  });
+
+  describe("gerarParcelasUnitarias - avanço de mesReferencia", () => {
+    it("incrementa mesReferencia de cada parcela respeitando a virada de ano", () => {
+      const installmentBase: Omit<Transaction, "id"> = {
+        tipo: "despesa",
+        valor: 300,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Smartphone 3x",
+        data: "2026-11-20",
+        mesReferencia: "2026-12",
+      };
+
+      const parcelas = gerarParcelasUnitarias(installmentBase, 1, 3);
+      expect(parcelas).toHaveLength(3);
+
+      expect(parcelas[0].mesReferencia).toBe("2026-12");
+      expect(parcelas[0].parcela).toBe(1);
+
+      expect(parcelas[1].mesReferencia).toBe("2027-01");
+      expect(parcelas[1].parcela).toBe(2);
+
+      expect(parcelas[2].mesReferencia).toBe("2027-02");
+      expect(parcelas[2].parcela).toBe(3);
+    });
+
+    it("utiliza fallback para data.slice(0, 7) quando mesReferencia inicial for omitido", () => {
+      const installmentBase: Omit<Transaction, "id"> = {
+        tipo: "despesa",
+        valor: 150,
+        categoria: "Financiamento",
+        conta: "Débito",
+        descricao: "Parcela sem mesReferencia prévio",
+        data: "2026-05-10",
+      };
+
+      const parcelas = gerarParcelasUnitarias(installmentBase, 1, 2);
+      expect(parcelas[0].mesReferencia).toBe("2026-05");
+      expect(parcelas[1].mesReferencia).toBe("2026-06");
+    });
+  });
+
+  describe("addTransaction e split-brain prevention (mesReferencia)", () => {
+    it("enforça regra de fechamento do cartão mesmo quando mesReferencia for passado explicitamente", () => {
+      upsertTransactionAccount("Cartão Teste Fechamento", "CREDIT_CARD");
+      const account = loadTransactionAccounts().find((a) => a.name === "Cartão Teste Fechamento")!;
+      const card = loadCards().find((c) => c.id === account.id)!;
+      expect(card.fechamento).toBe(5);
+
+      addTransaction({
+        tipo: "despesa",
+        valor: 150,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Compra com mesReferencia antigo",
+        data: "2026-10-25",
+        mesReferencia: "2026-10",
+        account_id: account.id,
+      });
+
+      const txs = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]");
+      const saved = txs.find((t: any) => t.descricao === "Compra com mesReferencia antigo");
+      expect(saved).toBeDefined();
+      expect(saved.mesReferencia).toBe("2026-11");
+    });
+
+    it("atribui mês corrente para compra no cartão anterior ao fechamento (d < closing)", () => {
+      const cardId = "card-test-closing-10";
+      upsertCard({ id: cardId, nome: "Cartão Teste 10", limite: 5000, fechamento: 10, vencimento: 20 });
+      upsertTransactionAccount("Cartão Teste 10", "CREDIT_CARD");
+
+      addTransaction({
+        tipo: "despesa",
+        valor: 75,
+        categoria: "Alimentação",
+        conta: "Crédito",
+        descricao: "Almoço antes fechamento",
+        data: "2026-10-04",
+        account_id: cardId,
+      });
+
+      const txs = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]");
+      const saved = txs.find((t: any) => t.descricao === "Almoço antes fechamento");
+      expect(saved).toBeDefined();
+      expect(saved.mesReferencia).toBe("2026-10");
+    });
+
+    it("avança para janeiro do ano seguinte em compras de dezembro após o fechamento", () => {
+      const cardId = "card-test-closing-10";
+      addTransaction({
+        tipo: "despesa",
+        valor: 300,
+        categoria: "Lazer",
+        conta: "Crédito",
+        descricao: "Ceia de Natal",
+        data: "2026-12-15",
+        account_id: cardId,
+      });
+
+      const txs = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]");
+      const saved = txs.find((t: any) => t.descricao === "Ceia de Natal");
+      expect(saved).toBeDefined();
+      expect(saved.mesReferencia).toBe("2027-01");
+    });
+
+    it("preserva mesReferencia customizado para métodos de pagamento que não sejam cartão de crédito", () => {
+      upsertTransactionAccount("Banco Corrente Teste", "CHECKING_ACCOUNT");
+      const account = loadTransactionAccounts().find((a) => a.name === "Banco Corrente Teste")!;
+
+      addTransaction({
+        tipo: "despesa",
+        valor: 500,
+        categoria: "Moradia",
+        conta: "Débito",
+        descricao: "Aluguel Adiantado Teste",
+        data: "2026-10-25",
+        mesReferencia: "2026-11",
+        account_id: account.id,
+      });
+
+      const txs = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]");
+      const saved = txs.find((t: any) => t.descricao === "Aluguel Adiantado Teste");
+      expect(saved).toBeDefined();
+      expect(saved.mesReferencia).toBe("2026-11");
+    });
+
+    it("totalAReceberMes filtra estritamente por mesReferencia e não por data de criação", () => {
+      const contact = { id: "contact-amigo-receber", name: "Amigo Receber" };
+      const cardId = "card-test-closing-10";
+
+      addTransaction({
+        tipo: "despesa",
+        valor: 120,
+        categoria: "Compras",
+        conta: "Crédito",
+        descricao: "Presente Amigo",
+        data: "2026-10-25",
+        contact_id: contact.id,
+        expense_owner: "Terceiros",
+        account_id: cardId,
+      });
+
+      const txs = JSON.parse(localStorage.getItem("fin-transactions-v1") ?? "[]");
+      expect(totalAReceberMes(contact, txs, "2026-10")).toBe(0);
+      expect(totalAReceberMes(contact, txs, "2026-11")).toBe(120);
+    });
+
+    it("processarRecorrencias recalcula mesReferencia dinamicamente para cartão de crédito", () => {
+      const cardId = "card-test-closing-5-rec";
+      upsertCard({ id: cardId, nome: "Cartão Recorrente 5", limite: 5000, fechamento: 5, vencimento: 15 });
+      upsertTransactionAccount("Cartão Recorrente 5", "CREDIT_CARD");
+
+      addTransaction({
+        tipo: "despesa",
+        valor: 55.9,
+        categoria: "Assinatura / Fixo",
+        conta: "Crédito",
+        descricao: "Streaming Recorrente Pós Fechamento",
+        data: "2026-09-10",
+        mesReferencia: "2026-10",
+        is_recurring: true,
+        account_id: cardId,
+      });
+
+      const cloned = processarRecorrencias(new Date("2026-10-15"));
+      const target = cloned.find((t) => t.descricao === "Streaming Recorrente Pós Fechamento");
+      expect(target).toBeDefined();
+      expect(target!.data).toBe("2026-10-10");
+      expect(target!.mesReferencia).toBe("2026-11");
+    });
   });
 });

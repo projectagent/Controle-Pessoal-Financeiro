@@ -4,6 +4,7 @@ export interface ApiAccount {
   id: string;
   name: string;
   type: 'CREDIT_CARD' | 'CHECKING_ACCOUNT';
+  closing_day?: number;
 }
 
 export interface ApiContact {
@@ -18,6 +19,7 @@ export interface ApiTransaction {
   description: string;
   category: string;
   date: string;
+  mesReferencia?: string | null;
   is_recurring: boolean;
   is_paid: boolean;
   current_installment?: number | null;

@@ -131,7 +131,7 @@ function Cartoes() {
   }
 
   const hoje = new Date();
-  const base = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() > cartao.fechamento ? 1 : 0) + offset, 1);
+  const base = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() >= cartao.fechamento ? 1 : 0) + offset, 1);
   const mes = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}`;
   const fechamento = new Date(base.getFullYear(), base.getMonth(), cartao.fechamento);
   const vencimento = new Date(base.getFullYear(), base.getMonth(), cartao.vencimento);

@@ -46,6 +46,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# AI Agent Workspaces & Artifacts
+.agents/
+
 # Editor & IDE Directories
 .vscode/*
 !.vscode/extensions.json

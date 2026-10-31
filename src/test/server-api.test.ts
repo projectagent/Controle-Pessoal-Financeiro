@@ -1,203 +1,504 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import sqlite3 from "sqlite3";
-import express from "express";
-import cors from "cors";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { createApp } from "../../server/server.js";
 
-describe("SQLite and Express Backend Integration", () => {
-  let db: sqlite3.Database;
+describe("Genuine Express and SQLite Backend API Integration", () => {
+  let server: http.Server;
+  let baseUrl: string;
+  let closeDb: () => Promise<void>;
+  let initDb: () => Promise<void>;
+  let runSql: (sql: string, params?: any[]) => Promise<any>;
+  let getSql: (sql: string, params?: any[]) => Promise<any>;
+  let allSql: (sql: string, params?: any[]) => Promise<any[]>;
 
-  const run = (sql: string, params: any[] = []) =>
-    new Promise<any>((resolve, reject) => {
-      db.run(sql, params, function (err) {
-        if (err) reject(err);
-        else resolve(this);
-      });
+  // Helper for type-safe API requests against real HTTP listener
+  async function apiRequest<T = any>(
+    path: string,
+    options: {
+      method?: string;
+      body?: any;
+      query?: Record<string, string | number | boolean>;
+    } = {}
+  ): Promise<{ status: number; body: T }> {
+    let url = `${baseUrl}${path}`;
+    if (options.query) {
+      const q = new URLSearchParams(
+        Object.entries(options.query).map(([k, v]) => [k, String(v)])
+      ).toString();
+      url += `?${q}`;
+    }
+    const res = await fetch(url, {
+      method: options.method || "GET",
+      headers: options.body ? { "Content-Type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
     });
-
-  const get = (sql: string, params: any[] = []) =>
-    new Promise<any>((resolve, reject) => {
-      db.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-
-  const all = (sql: string, params: any[] = []) =>
-    new Promise<any[]>((resolve, reject) => {
-      db.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
+    const text = await res.text();
+    let body: any = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+    return { status: res.status, body: body as T };
+  }
 
   beforeAll(async () => {
-    db = new sqlite3.Database(":memory:");
-    await run("PRAGMA foreign_keys = ON;");
+    // 1. Create completely isolated test server instance in memory
+    const serverInstance = createApp({ dbPath: ":memory:", silent: true });
+    closeDb = serverInstance.closeDatabase;
+    initDb = serverInstance.initDatabase;
+    runSql = serverInstance.runAsync;
+    getSql = serverInstance.getAsync;
+    allSql = serverInstance.allAsync;
 
-    // 1. Accounts schema
-    await run(`
-      CREATE TABLE accounts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('CREDIT_CARD', 'CHECKING_ACCOUNT'))
-      )
-    `);
+    // 2. Initialize real database schema using server's own initDatabase()
+    await initDb();
 
-    // 2. Contacts schema
-    await run(`
-      CREATE TABLE contacts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL
-      )
-    `);
-
-    // 3. Transactions schema with foreign keys
-    await run(`
-      CREATE TABLE transactions (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        amount REAL NOT NULL,
-        description TEXT NOT NULL,
-        category TEXT NOT NULL,
-        date TEXT NOT NULL,
-        is_recurring INTEGER DEFAULT 0,
-        is_paid INTEGER DEFAULT 0,
-        current_installment INTEGER,
-        total_installments INTEGER,
-        asset_value REAL,
-        installment_group_id TEXT,
-        account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
-        contact_id TEXT REFERENCES contacts(id) ON DELETE SET NULL
-      )
-    `);
+    // 3. Start ephemeral HTTP server on dynamic port (zero collisions)
+    server = http.createServer(serverInstance.app);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address() as AddressInfo;
+        baseUrl = `http://127.0.0.1:${addr.port}`;
+        resolve();
+      });
+    });
   });
 
-  afterAll(() => {
-    db.close();
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+    await closeDb();
   });
 
-  it("creates accounts and enforces type constraint", async () => {
-    await run("INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)", ["acc1", "Nubank", "CREDIT_CARD"]);
-    await run("INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)", ["acc2", "Itaú", "CHECKING_ACCOUNT"]);
+  // -------------------------------------------------------------------------
+  // 1. Accounts & Contacts Endpoints
+  // -------------------------------------------------------------------------
+  describe("Accounts and Contacts Endpoints", () => {
+    it("creates credit card account with custom closing day via POST /api/accounts", async () => {
+      const { status, body } = await apiRequest("/api/accounts", {
+        method: "POST",
+        body: {
+          id: "card_nubank",
+          name: "Nubank Platinum",
+          type: "CREDIT_CARD",
+          closing_day: 10,
+        },
+      });
 
-    const rows = await all("SELECT * FROM accounts ORDER BY name");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].name).toBe("Itaú");
-    expect(rows[1].name).toBe("Nubank");
+      expect(status).toBe(201);
+      expect(body.id).toBe("card_nubank");
+      expect(body.name).toBe("Nubank Platinum");
+      expect(body.type).toBe("CREDIT_CARD");
+      expect(body.closing_day).toBe(10);
+    });
 
-    // Invalid type should fail
-    await expect(
-      run("INSERT INTO accounts (id, name, type) VALUES (?, ?, ?)", ["acc3", "Poupança", "INVALID"])
-    ).rejects.toThrow();
+    it("creates checking account via POST /api/accounts", async () => {
+      const { status, body } = await apiRequest("/api/accounts", {
+        method: "POST",
+        body: {
+          id: "acc_itau",
+          name: "Itaú Corrente",
+          type: "CHECKING_ACCOUNT",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.id).toBe("acc_itau");
+      expect(body.type).toBe("CHECKING_ACCOUNT");
+    });
+
+    it("creates contact via POST /api/contacts", async () => {
+      const { status, body } = await apiRequest("/api/contacts", {
+        method: "POST",
+        body: {
+          id: "contact_joao",
+          name: "João Silva",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.id).toBe("contact_joao");
+      expect(body.name).toBe("João Silva");
+    });
   });
 
-  it("creates contacts and links to transactions via foreign keys", async () => {
-    await run("INSERT INTO contacts (id, name) VALUES (?, ?)", ["c1", "João"]);
-    await run("INSERT INTO contacts (id, name) VALUES (?, ?)", ["c2", "Maria"]);
+  // -------------------------------------------------------------------------
+  // 2. POST /api/transactions (Genuine Route Business Logic Testing)
+  // -------------------------------------------------------------------------
+  describe("POST /api/transactions — mesReferencia Business Logic", () => {
+    it("computes mesReferencia = current month for credit card purchase BEFORE closing day", async () => {
+      // Closing day is 10; purchase is on 2026-10-09 (day 9 < 10)
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_before",
+          amount: 150,
+          description: "Supermercado antes fechamento",
+          category: "Alimentação",
+          date: "2026-10-09",
+          account_id: "card_nubank",
+        },
+      });
 
-    const contacts = await all("SELECT * FROM contacts");
-    expect(contacts).toHaveLength(2);
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2026-10");
+    });
 
-    // Insert transaction linked to account and contact
-    await run(`
-      INSERT INTO transactions (id, type, amount, description, category, date, is_recurring, is_paid, account_id, contact_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ["tx1", "despesa", 100, "Almoço com João", "Alimentação", "2026-10-15", 0, 0, "acc1", "c1"]);
+    it("computes mesReferencia = next month for credit card purchase ON closing day", async () => {
+      // Closing day is 10; purchase is on 2026-10-10 (day 10 == 10)
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_on",
+          amount: 200,
+          description: "Farmácia no fechamento",
+          category: "Saúde",
+          date: "2026-10-10",
+          account_id: "card_nubank",
+        },
+      });
 
-    const tx = await get("SELECT * FROM transactions WHERE id = ?", ["tx1"]);
-    expect(tx).toBeDefined();
-    expect(tx.amount).toBe(100);
-    expect(tx.contact_id).toBe("c1");
-    expect(tx.account_id).toBe("acc1");
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2026-11");
+    });
+
+    it("computes mesReferencia = next month for credit card purchase AFTER closing day", async () => {
+      // Closing day is 10; purchase is on 2026-10-25 (day 25 > 10)
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_after",
+          amount: 450,
+          description: "Smartphone após fechamento",
+          category: "Compras",
+          date: "2026-10-25",
+          account_id: "card_nubank",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2026-11");
+    });
+
+    it("computes mesReferencia with YEAR ROLLOVER for credit card purchase in December on/after closing day", async () => {
+      // Closing day is 10; purchase is on 2026-12-15 (day 15 >= 10) -> rolls to 2027-01
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_dec_rollover",
+          amount: 600,
+          description: "Presentes de Natal",
+          category: "Compras",
+          date: "2026-12-15",
+          account_id: "card_nubank",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2027-01");
+    });
+
+    it("respects explicit mesReferencia for non-credit card payment methods", async () => {
+      // Non-credit card (Itaú Checking Account) with explicit mesReferencia
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_checking_explicit",
+          amount: 1200,
+          description: "Aluguel adiantado",
+          category: "Moradia",
+          date: "2026-10-01",
+          mesReferencia: "2026-11",
+          account_id: "acc_itau",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2026-11");
+    });
+
+    it("falls back to transaction date month for non-credit card when explicit mesReferencia is omitted", async () => {
+      const { status, body } = await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_checking_default",
+          amount: 85,
+          description: "Padaria débito",
+          category: "Alimentação",
+          date: "2026-10-18",
+          account_id: "acc_itau",
+        },
+      });
+
+      expect(status).toBe(201);
+      expect(body.mesReferencia).toBe("2026-10");
+    });
+
+    it("handles batch transaction insertion via POST /api/transactions with array payload", async () => {
+      const { status, body } = await apiRequest<any[]>("/api/transactions", {
+        method: "POST",
+        body: [
+          {
+            id: "batch_1",
+            amount: 50,
+            description: "Item Lote 1",
+            category: "Outros",
+            date: "2026-10-02",
+            account_id: "card_nubank",
+          },
+          {
+            id: "batch_2",
+            amount: 75,
+            description: "Item Lote 2",
+            category: "Outros",
+            date: "2026-10-12",
+            account_id: "card_nubank",
+          },
+        ],
+      });
+
+      expect(status).toBe(201);
+      expect(Array.isArray(body)).toBe(true);
+      expect(body).toHaveLength(2);
+      expect(body[0].mesReferencia).toBe("2026-10"); // day 2 < 10
+      expect(body[1].mesReferencia).toBe("2026-11"); // day 12 >= 10
+    });
   });
 
-  it("computes Dashboard SQL summary correctly isolating personal expenses and third-party pending", async () => {
-    // Income
-    await run(`
-      INSERT INTO transactions (id, type, amount, description, category, date, is_recurring, is_paid, account_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ["tx2", "receita", 5000, "Salário", "Salário", "2026-10-01", 0, 1, "acc2"]);
+  // -------------------------------------------------------------------------
+  // 3. GET /api/transactions (Filtering strictly by mesReferencia)
+  // -------------------------------------------------------------------------
+  describe("GET /api/transactions — Month Filtering", () => {
+    it("filters transactions strictly by mesReferencia query parameter", async () => {
+      // Query for October 2026
+      const octRes = await apiRequest<any[]>("/api/transactions", {
+        query: { month: "2026-10" },
+      });
+      expect(octRes.status).toBe(200);
+      expect(octRes.body.length).toBeGreaterThan(0);
+      expect(octRes.body.every((t) => t.mesReferencia === "2026-10")).toBe(true);
 
-    // Personal expense
-    await run(`
-      INSERT INTO transactions (id, type, amount, description, category, date, is_recurring, is_paid, account_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ["tx3", "despesa", 1500, "Aluguel", "Moradia", "2026-10-05", 0, 1, "acc2"]);
+      // Verify that tx_on (made on 2026-10-10) is NOT in October results
+      const foundOnOct = octRes.body.find((t) => t.id === "tx_on");
+      expect(foundOnOct).toBeUndefined();
 
-    // Third-party expense already paid
-    await run(`
-      INSERT INTO transactions (id, type, amount, description, category, date, is_recurring, is_paid, account_id, contact_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ["tx4", "despesa", 50, "Uber João Quitado", "Transporte", "2026-10-10", 0, 1, "acc1", "c1"]);
+      // Query for November 2026
+      const novRes = await apiRequest<any[]>("/api/transactions", {
+        query: { month: "2026-11" },
+      });
+      expect(novRes.status).toBe(200);
+      expect(novRes.body.length).toBeGreaterThan(0);
+      expect(novRes.body.every((t) => t.mesReferencia === "2026-11")).toBe(true);
 
-    // Calculate current balance: Income (5000) - All Expenses (100 + 1500 + 50 = 1650) = 3350
-    const balanceResult = await get(`
-      SELECT 
-        COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') THEN amount ELSE 0 END), 0) -
-        COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') THEN amount ELSE 0 END), 0) AS current_balance
-      FROM transactions
-    `);
-    expect(balanceResult.current_balance).toBe(3350);
+      // Verify that tx_on (made on 2026-10-10) and tx_after (made on 2026-10-25) ARE in November results
+      const foundOnNov = novRes.body.find((t) => t.id === "tx_on");
+      const foundAfterNov = novRes.body.find((t) => t.id === "tx_after");
+      expect(foundOnNov).toBeDefined();
+      expect(foundAfterNov).toBeDefined();
 
-    // Calculate monthly breakdown for October 2026
-    const monthlyResult = await get(`
-      SELECT
-        COALESCE(SUM(CASE WHEN type = 'despesa' AND contact_id IS NULL THEN amount ELSE 0 END), 0) AS personal_expenses,
-        COALESCE(SUM(CASE WHEN type = 'despesa' AND contact_id IS NOT NULL AND is_paid = 0 THEN amount ELSE 0 END), 0) AS third_party_pending,
-        COALESCE(SUM(CASE WHEN type = 'despesa' THEN amount ELSE 0 END), 0) AS total_expenses,
-        COALESCE(SUM(CASE WHEN type = 'receita' THEN amount ELSE 0 END), 0) AS total_income
-      FROM transactions
-      WHERE date LIKE '2026-10%'
-    `);
-
-    expect(monthlyResult.personal_expenses).toBe(1500); // Only personal
-    expect(monthlyResult.third_party_pending).toBe(100); // Only pending third party (tx1)
-    expect(monthlyResult.total_expenses).toBe(1650); // 1500 + 100 + 50
-    expect(monthlyResult.total_income).toBe(5000);
+      // Query for January 2027
+      const janRes = await apiRequest<any[]>("/api/transactions", {
+        query: { month: "2027-01" },
+      });
+      expect(janRes.status).toBe(200);
+      const foundDec = janRes.body.find((t) => t.id === "tx_dec_rollover");
+      expect(foundDec).toBeDefined();
+      expect(foundDec.mesReferencia).toBe("2027-01");
+    });
   });
 
-  it("computes Third-Party SQL summary grouped by contact", async () => {
-    const contactsSummary = await all(`
-      SELECT 
-        c.id,
-        c.name,
-        COALESCE(SUM(CASE WHEN t.type = 'despesa' AND t.is_paid = 0 THEN t.amount ELSE 0 END), 0) AS total_a_receber_geral,
-        COALESCE(SUM(CASE WHEN t.type = 'despesa' AND t.is_paid = 0 AND t.date LIKE '2026-10%' THEN t.amount ELSE 0 END), 0) AS total_a_receber_mes,
-        COALESCE(SUM(CASE WHEN t.type = 'despesa' AND t.is_paid = 1 THEN t.amount ELSE 0 END), 0) AS total_pago_historico
-      FROM contacts c
-      LEFT JOIN transactions t ON c.id = t.contact_id
-      GROUP BY c.id, c.name
-      ORDER BY c.name ASC
-    `);
+  // -------------------------------------------------------------------------
+  // 4. GET /api/dashboard/summary (Aggregation strictly by mesReferencia)
+  // -------------------------------------------------------------------------
+  describe("GET /api/dashboard/summary — Aggregation Verification", () => {
+    it("calculates personal expenses and category breakdowns strictly by mesReferencia", async () => {
+      // November summary must include tx_on (200), tx_after (450), tx_checking_explicit (1200), batch_2 (75) = 1925
+      const { status, body } = await apiRequest("/api/dashboard/summary", {
+        query: { month: "2026-11" },
+      });
 
-    const joao = contactsSummary.find((c) => c.name === "João");
-    const maria = contactsSummary.find((c) => c.name === "Maria");
+      expect(status).toBe(200);
+      expect(body.month).toBe("2026-11");
+      expect(body.monthly.personal_expenses).toBe(1925);
 
-    expect(joao?.total_a_receber_geral).toBe(100);
-    expect(joao?.total_a_receber_mes).toBe(100);
-    expect(joao?.total_pago_historico).toBe(50);
+      // Verify category breakdown
+      const comprasCat = body.categories.find((c: any) => c.category === "Compras");
+      expect(comprasCat).toBeDefined();
+      expect(comprasCat.total).toBe(450); // Smartphone
 
-    expect(maria?.total_a_receber_geral).toBe(0);
-    expect(maria?.total_a_receber_mes).toBe(0);
+      const moradiaCat = body.categories.find((c: any) => c.category === "Moradia");
+      expect(moradiaCat).toBeDefined();
+      expect(moradiaCat.total).toBe(1200); // Aluguel
+    });
+
+    it("excludes next-month credit card purchases from the current month summary", async () => {
+      const { status, body } = await apiRequest("/api/dashboard/summary", {
+        query: { month: "2026-10" },
+      });
+
+      expect(status).toBe(200);
+      // October includes tx_before (150), tx_checking_default (85), batch_1 (50) = 285
+      expect(body.monthly.personal_expenses).toBe(285);
+    });
   });
-  it("resets database deleting all operational records while preserving schema", async () => {
-    await run("PRAGMA foreign_keys = OFF;");
-    await run("DELETE FROM transactions;");
-    await run("DELETE FROM contacts;");
-    await run("DELETE FROM accounts;");
-    await run("PRAGMA foreign_keys = ON;");
 
-    const txCount = await get("SELECT COUNT(*) as count FROM transactions");
-    const accCount = await get("SELECT COUNT(*) as count FROM accounts");
-    const contactCount = await get("SELECT COUNT(*) as count FROM contacts");
+  // -------------------------------------------------------------------------
+  // 5. GET /api/third-party/summary (Third-Party Pending Grouping)
+  // -------------------------------------------------------------------------
+  describe("GET /api/third-party/summary — Third-Party Aggregation", () => {
+    it("groups third-party expenses by mesReferencia", async () => {
+      // Add third-party expense on credit card after closing (day 20 > 10) -> mesReferencia = '2026-11'
+      await apiRequest("/api/transactions", {
+        method: "POST",
+        body: {
+          id: "tx_third_party",
+          amount: 320,
+          description: "Jantar compartilhado",
+          category: "Alimentação",
+          date: "2026-10-20",
+          account_id: "card_nubank",
+          contact_id: "contact_joao",
+          is_paid: 0,
+        },
+      });
 
-    expect(txCount.count).toBe(0);
-    expect(accCount.count).toBe(0);
-    expect(contactCount.count).toBe(0);
+      // October summary should have 0 for this contact in total_a_receber_mes
+      const octSummary = await apiRequest("/api/third-party/summary", {
+        query: { month: "2026-10" },
+      });
+      expect(octSummary.status).toBe(200);
+      expect(octSummary.body.total_a_receber_mes).toBe(0);
 
-    // Schema is still intact and can insert new items
-    await run("INSERT INTO accounts (id, name, type) VALUES ('a_new', 'Novo Banco', 'CHECKING_ACCOUNT')");
-    const newAcc = await get("SELECT * FROM accounts WHERE id = 'a_new'");
-    expect(newAcc.name).toBe("Novo Banco");
+      // November summary must reflect 320 in total_a_receber_mes
+      const novSummary = await apiRequest("/api/third-party/summary", {
+        query: { month: "2026-11" },
+      });
+      expect(novSummary.status).toBe(200);
+      expect(novSummary.body.total_a_receber_mes).toBe(320);
+      expect(novSummary.body.total_a_receber_geral).toBe(320);
+
+      const contactItem = novSummary.body.contacts.find((c: any) => c.id === "contact_joao");
+      expect(contactItem).toBeDefined();
+      expect(contactItem.total_a_receber_mes).toBe(320);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 6. POST /api/transactions/process-recurring (Recurring Process Verification)
+  // -------------------------------------------------------------------------
+  describe("POST /api/transactions/process-recurring", () => {
+    it("assigns mesReferencia matching credit card closing day when renewing recurring subscriptions", async () => {
+      // 1. Create accounts: card with closing day 5, checking account
+      await apiRequest("/api/accounts", {
+        method: "POST",
+        body: { id: "card_recur", name: "Cartão Recorrente", type: "CREDIT_CARD", closing_day: 5 },
+      });
+      await apiRequest("/api/accounts", {
+        method: "POST",
+        body: { id: "bank_recur", name: "Banco Recorrente", type: "CHECKING_ACCOUNT" },
+      });
+
+      // 2. Insert recurring transactions in October
+      // Subscription 1: Credit card with date 10 (10 >= 5 -> when renewed in November, date 2026-11-10 -> mesReferencia 2026-12)
+      await runSql(
+        `INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, is_recurring, is_paid, account_id)
+         VALUES ('sub_cc_after', 'despesa', 55.90, 'Netflix 4K', 'Assinatura / Fixo', '2026-10-10', '2026-11', 1, 0, 'card_recur')`
+      );
+      // Subscription 2: Credit card with date 3 (3 < 5 -> when renewed in November, date 2026-11-03 -> mesReferencia 2026-11)
+      await runSql(
+        `INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, is_recurring, is_paid, account_id)
+         VALUES ('sub_cc_before', 'despesa', 21.90, 'Spotify Premium', 'Assinatura / Fixo', '2026-10-03', '2026-10', 1, 0, 'card_recur')`
+      );
+      // Subscription 3: Bank account with date 10 (non-card -> date 2026-11-10 -> mesReferencia 2026-11)
+      await runSql(
+        `INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, is_recurring, is_paid, account_id)
+         VALUES ('sub_bank', 'despesa', 120.00, 'Gympass Fit', 'Assinatura / Fixo', '2026-10-10', '2026-10', 1, 0, 'bank_recur')`
+      );
+
+      // 3. Trigger recurring renewal for November 2026
+      const { status, body } = await apiRequest("/api/transactions/process-recurring", {
+        method: "POST",
+        body: { targetDate: "2026-11-15" },
+      });
+
+      expect(status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(body.processedCount).toBe(3);
+
+      const netflix = await getSql("SELECT * FROM transactions WHERE description = 'Netflix 4K' AND date LIKE '2026-11%'");
+      expect(netflix).toBeDefined();
+      expect(netflix.date).toBe("2026-11-10");
+      expect(netflix.mesReferencia).toBe("2026-12"); // 10 >= 5 -> Dec invoice
+
+      const spotify = await getSql("SELECT * FROM transactions WHERE description = 'Spotify Premium' AND date LIKE '2026-11%'");
+      expect(spotify).toBeDefined();
+      expect(spotify.date).toBe("2026-11-03");
+      expect(spotify.mesReferencia).toBe("2026-11"); // 3 < 5 -> Nov invoice
+
+      const gympass = await getSql("SELECT * FROM transactions WHERE description = 'Gympass Fit' AND date LIKE '2026-11%'");
+      expect(gympass).toBeDefined();
+      expect(gympass.date).toBe("2026-11-10");
+      expect(gympass.mesReferencia).toBe("2026-11"); // checking account -> Nov
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 7. Retroactive Migration Testing (Using server's genuine initDatabase)
+  // -------------------------------------------------------------------------
+  describe("Retroactive Migration Verification", () => {
+    it("executes retroactive migration populating mesReferencia for legacy records", async () => {
+      // Insert legacy rows directly into table with NULL mesReferencia
+      await runSql(
+        `INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, is_recurring, is_paid, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 0, ?)`,
+        ["legacy_before", "despesa", 99, "Legacy antes", "Outros", "2026-08-04", "card_nubank"]
+      );
+      await runSql(
+        `INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, is_recurring, is_paid, account_id)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 0, 0, ?)`,
+        ["legacy_after", "despesa", 199, "Legacy após", "Outros", "2026-08-15", "card_nubank"]
+      );
+
+      // Re-run the server's genuine initDatabase()
+      await initDb();
+
+      const r1 = await getSql("SELECT mesReferencia FROM transactions WHERE id = 'legacy_before'");
+      const r2 = await getSql("SELECT mesReferencia FROM transactions WHERE id = 'legacy_after'");
+
+      expect(r1.mesReferencia).toBe("2026-08"); // 4 < 10 -> same month
+      expect(r2.mesReferencia).toBe("2026-09"); // 15 >= 10 -> next month
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 8. Database Reset Endpoint
+  // -------------------------------------------------------------------------
+  describe("DELETE /api/database/reset", () => {
+    it("resets operational data while keeping schema structure intact", async () => {
+      const { status, body } = await apiRequest("/api/database/reset", {
+        method: "DELETE",
+      });
+
+      expect(status).toBe(200);
+      expect(body.success).toBe(true);
+
+      const countTx = await getSql("SELECT COUNT(*) as count FROM transactions");
+      const countAcc = await getSql("SELECT COUNT(*) as count FROM accounts");
+      const countContact = await getSql("SELECT COUNT(*) as count FROM contacts");
+
+      expect(countTx.count).toBe(0);
+      expect(countAcc.count).toBe(0);
+      expect(countContact.count).toBe(0);
+
+      // Verify schema is still operational
+      const createRes = await apiRequest("/api/accounts", {
+        method: "POST",
+        body: { id: "new_acc", name: "Conta Pós Reset", type: "CHECKING_ACCOUNT" },
+      });
+      expect(createRes.status).toBe(201);
+    });
   });
 });

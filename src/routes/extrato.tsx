@@ -13,7 +13,7 @@ import { ContactPicker } from "@/components/ContactPicker";
 import { TransactionAccountPicker } from "@/components/TransactionAccountPicker";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, resumoMensalSeparado, transacoesDoMes, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
+import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, resumoMensalSeparado, transacoesDoMes, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useCards, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
 
 export const Route = createFileRoute("/extrato")({
   head: () => ({
@@ -207,8 +207,29 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
   const [categoria, setCategoria] = useState("Outros");
   const [accountId, setAccountId] = useState<string | null>(null);
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+  const [mesReferencia, setMesReferencia] = useState(() => new Date().toISOString().slice(0, 7));
+  const [userEditedMesRef, setUserEditedMesRef] = useState(false);
   const [contactId, setContactId] = useState<string | null>(null);
   const [isRecurring, setIsRecurring] = useState(true);
+
+  const cards = useCards();
+  const accountType = tipoDaContaTransacao(accountId);
+  const isCreditCard = accountType === "CREDIT_CARD";
+  const selectedCard = isCreditCard ? cards.find((c) => c.id === accountId) : null;
+  const closingDay = selectedCard?.fechamento ?? 5;
+
+  // Sincroniza mesReferencia com data e fechamento do cartão
+  React.useEffect(() => {
+    if (isCreditCard && data && data.length >= 10) {
+      const [y, m, d] = data.split("-").map(Number);
+      if (Number.isFinite(y) && Number.isFinite(m) && Number.isFinite(d)) {
+        const computed = d >= closingDay ? deslocarMes(data.slice(0, 7), 1) : data.slice(0, 7);
+        setMesReferencia(computed);
+      }
+    } else if (!userEditedMesRef && data && data.length >= 7) {
+      setMesReferencia(data.slice(0, 7));
+    }
+  }, [accountId, isCreditCard, closingDay, data, userEditedMesRef]);
 
   const resetAndClose = () => {
     setTipo("despesa");
@@ -217,6 +238,8 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
     setCategoria("Outros");
     setAccountId(null);
     setData(new Date().toISOString().slice(0, 10));
+    setMesReferencia(new Date().toISOString().slice(0, 7));
+    setUserEditedMesRef(false);
     setContactId(null);
     setIsRecurring(true);
     onClose();
@@ -227,16 +250,17 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
     const amount = Number(valor);
     if (!descricao.trim()) { toast.error("Informe uma descrição"); return; }
     if (!(amount > 0)) { toast.error("Informe um valor maior que zero"); return; }
-    const accountType = tipoDaContaTransacao(accountId);
+    
     addTransaction({
       tipo,
       valor: amount,
       categoria,
-      conta: accountType === "CREDIT_CARD" ? "Crédito" : "Débito",
+      conta: isCreditCard ? "Crédito" : "Débito",
       descricao: descricao.trim(),
       data,
+      mesReferencia: isCreditCard ? undefined : mesReferencia,
       account_id: accountId,
-      ...(accountType === "CREDIT_CARD" && accountId ? { cartao: accountId } : {}),
+      ...(isCreditCard && accountId ? { cartao: accountId } : {}),
       ...(accountType === "CHECKING_ACCOUNT" && accountId ? { conta_bancaria_id: accountId } : {}),
       contact_id: tipo === "despesa" ? contactId : null,
       expense_owner: tipo === "despesa" && contactId ? "Terceiros" : "Próprio",
@@ -260,7 +284,47 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
             <div className="grid gap-2"><Label htmlFor="manual-categoria">Categoria</Label><select id="manual-categoria" className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={categoria} onChange={(event) => setCategoria(event.target.value)}>{CATEGORIAS.map((item) => <option key={item}>{item}</option>)}</select></div>
             <div className="grid gap-2"><Label htmlFor="manual-account">Cartão / Conta</Label><TransactionAccountPicker id="manual-account" value={accountId} onChange={setAccountId} /></div>
           </div>
-          <div className="grid gap-2"><Label htmlFor="manual-data">Data</Label><Input id="manual-data" type="date" value={data} onChange={(event) => setData(event.target.value)} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="manual-data">Data</Label>
+              <Input
+                id="manual-data"
+                type="date"
+                value={data}
+                onChange={(event) => setData(event.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="manual-mes-referencia">Mês de Referência</Label>
+                {isCreditCard && (
+                  <span className="text-[11px] font-medium text-primary">
+                    Fatura dia {closingDay}
+                  </span>
+                )}
+              </div>
+              <Input
+                id="manual-mes-referencia"
+                type="month"
+                value={mesReferencia}
+                disabled={isCreditCard}
+                onChange={(event) => {
+                  setUserEditedMesRef(true);
+                  setMesReferencia(event.target.value);
+                }}
+                className={isCreditCard ? "bg-muted/50 cursor-not-allowed opacity-90" : ""}
+              />
+              {isCreditCard ? (
+                <p className="text-[11px] text-muted-foreground leading-tight">
+                  Calculado pela fatura do cartão (fechamento dia {closingDay}). Compras a partir do dia {closingDay} entram no mês seguinte ({mesReferencia}).
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground leading-tight">
+                  Mês contábil onde o lançamento será contabilizado no Dashboard.
+                </p>
+              )}
+            </div>
+          </div>
           {categoria === "Assinatura / Fixo" && (
             <div className="flex items-center justify-between rounded-lg border border-border bg-card p-3">
               <div className="space-y-0.5">

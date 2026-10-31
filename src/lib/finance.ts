@@ -15,6 +15,7 @@ export interface Transaction {
   conta: string;
   descricao: string;
   data: string; // ISO yyyy-mm-dd
+  mesReferencia?: string;
   expense_owner?: ExpenseOwner;
   contact_id?: string | null;
   account_id?: string | null;
@@ -60,7 +61,7 @@ export const ym = (y: number, m: number) => `${y}-${pad(m + 1)}`; // m 0-based
 /** Month (yyyy-mm) of the invoice a purchase falls into. */
 export function faturaDe(t: Transaction, c: Cartao) {
   const [y, m, d] = t.data.split("-").map(Number) as [number, number, number];
-  const dt = new Date(y, m - 1 + (d > c.fechamento ? 1 : 0), 1);
+  const dt = new Date(y, m - 1 + (d >= c.fechamento ? 1 : 0), 1);
   return ym(dt.getFullYear(), dt.getMonth());
 }
 
@@ -81,11 +82,13 @@ export function gerarParcelasUnitarias(t: Omit<Transaction, "id">, parcelaInicia
   const firstInstallment = Math.max(1, Math.min(999, Math.floor(parcelaInicial)));
   const total = Math.max(firstInstallment, Math.min(999, Math.floor(totalParcelas)));
   const groupId = t.installment_group_id ?? createInstallmentGroupId();
+  const baseMes = t.mesReferencia || t.data.slice(0, 7);
   return Array.from({ length: total - firstInstallment + 1 }, (_, index) => ({
     ...t,
     installment_group_id: groupId,
     valor: t.valor,
     data: addMonths(t.data, index),
+    mesReferencia: deslocarMes(baseMes, index),
     parcela: firstInstallment + index,
     totalParcelas: total,
     parcelaInicial: firstInstallment,
@@ -222,21 +225,75 @@ async function ensureAccountsOnServer(accountIds: Array<string | null | undefine
   const ids = [...new Set(accountIds.filter((id): id is string => !!id))];
   if (!ids.length) return;
   const known = loadTransactionAccounts();
+  const cards = loadCards();
   for (const id of ids) {
     const account = known.find((item) => item.id === id);
-    if (account) await api.createAccount({ id, name: account.name, type: account.type }).catch(() => {});
+    if (account) {
+      const card = cards.find((c) => c.id === id);
+      await api.createAccount({
+        id,
+        name: account.name,
+        type: account.type,
+        ...(card ? { closing_day: card.fechamento } : {}),
+      }).catch(() => {});
+    }
   }
 }
 
 export function createInstallmentGroupId() {
   return `installment-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/**
+ * Computes the reference month (YYYY-MM) for a transaction according to business rules:
+ * - Credit Card: if transaction day >= closing_day, advances to next month; otherwise current month.
+ *   (Strictly overrides any manual month provided).
+ * - Other payment methods: uses the explicit reference month provided, defaulting to transaction date month.
+ */
+export function computeTransactionMesReferencia(
+  data: string,
+  accountType?: TransactionAccountType | string,
+  closingDay: number = 5,
+  explicitMes?: string,
+): string {
+  if (accountType === "CREDIT_CARD") {
+    const rawDate = (data || "").slice(0, 10);
+    const [y, m, d] = rawDate.split("-").map(Number);
+    const closing = Number(closingDay) || 5;
+    return d >= closing ? deslocarMes(rawDate.slice(0, 7), 1) : rawDate.slice(0, 7);
+  }
+  return explicitMes || (data ? data.slice(0, 7) : new Date().toISOString().slice(0, 7));
+}
+
 export function addTransaction(
   t: Omit<Transaction, "id">,
   parcelas = 1,
-  options: { parcelaInicial?: number } = {},
+  options: { parcelaInicial?: number; valorUnitario?: boolean } = {},
 ) {
-  const selectedAccount = t.account_id ? getTransactionAccount(t.account_id) : undefined;
+  // Resilient account & card resolution
+  const cardId = t.account_id
+    ?? (t.cartao && loadCards().some((c) => c.id === t.cartao) ? t.cartao : undefined)
+    ?? (t.conta === "Crédito" ? cartaoDe(t) : undefined);
+  const accountId = t.account_id
+    ?? cardId
+    ?? (t.conta_bancaria_id && loadBankAccounts().some((b) => b.id === t.conta_bancaria_id) ? t.conta_bancaria_id : undefined)
+    ?? null;
+  const selectedAccount = accountId ? getTransactionAccount(accountId) : undefined;
+  const isCreditCard = selectedAccount?.type === "CREDIT_CARD" || t.conta === "Crédito" || Boolean(t.cartao);
+
+  const card = isCreditCard
+    ? (loadCards().find((c) => c.id === (selectedAccount?.id || cardId)) ?? loadCards()[0])
+    : undefined;
+  const closingDay = card?.fechamento ?? 5;
+
+  // Strict enforcement: credit cards always use invoice rule; other methods use explicit mesReferencia
+  const computedMes = computeTransactionMesReferencia(
+    t.data,
+    isCreditCard ? "CREDIT_CARD" : selectedAccount?.type,
+    closingDay,
+    t.mesReferencia,
+  );
+
   const isAssinatura = t.categoria === "Assinatura / Fixo";
   const isRecurring = isAssinatura
     ? (t.is_recurring !== undefined ? t.is_recurring : true)
@@ -244,10 +301,11 @@ export function addTransaction(
 
   const normalized = {
     ...t,
-    account_id: t.account_id ?? null,
+    mesReferencia: computedMes,
+    account_id: accountId,
     is_paid: t.is_paid ?? false,
-    ...(selectedAccount?.type === "CREDIT_CARD" ? { cartao: selectedAccount.id, conta: "Crédito" } : {}),
-    ...(selectedAccount?.type === "CHECKING_ACCOUNT" ? { conta_bancaria_id: selectedAccount.id } : {}),
+    ...(isCreditCard ? { cartao: card?.id ?? cardId ?? selectedAccount?.id, conta: "Crédito" } : {}),
+    ...(selectedAccount?.type === "CHECKING_ACCOUNT" && accountId ? { conta_bancaria_id: accountId } : {}),
     expense_owner: t.contact_id ? "Terceiros" as const : "Próprio" as const,
     ...(isRecurring !== undefined ? { is_recurring: isRecurring } : {}),
   };
@@ -261,7 +319,17 @@ export function addTransaction(
   if (typeof window !== "undefined") {
     ensureAccountsOnServer(rows.map((row) => row.account_id))
       .then(() => api.createTransactions(rows))
-      .then(() => {
+      .then((serverTxs) => {
+        if (serverTxs) {
+          const list = Array.isArray(serverTxs) ? serverTxs : [serverTxs];
+          const serverMap = new Map(list.map((tx: any) => [tx.id, tx]));
+          const current = load();
+          const reconciled = current.map((localTx) => {
+            const fromServer = serverMap.get(localTx.id);
+            return fromServer ? { ...localTx, ...fromServer } : localTx;
+          });
+          save(reconciled);
+        }
         listeners.forEach((l) => l());
       })
       .catch((err) => console.warn("Failed to sync to SQLite:", err));
@@ -334,7 +402,14 @@ export function totalAReceberMes(
   const list = Array.isArray(contacts) ? contacts : [contacts];
   const contactIds = new Set(list.map((c) => c.id));
   return transactions
-    .filter((transaction) => transaction.tipo === "despesa" && transaction.contact_id && contactIds.has(transaction.contact_id) && transaction.data.startsWith(mes) && !transaction.is_paid)
+    .filter(
+      (transaction) =>
+        transaction.tipo === "despesa" &&
+        Boolean(transaction.contact_id) &&
+        contactIds.has(transaction.contact_id!) &&
+        (transaction.mesReferencia || transaction.data.slice(0, 7)) === mes &&
+        !transaction.is_paid,
+    )
     .reduce((sum, transaction) => sum + transaction.valor, 0);
 }
 
@@ -405,9 +480,9 @@ export function redatarPlano(ids: string[], primeiraData: string) {
     .sort((a, b) => (a.parcela ?? 0) - (b.parcela ?? 0) || a.data.localeCompare(b.data));
   if (!rows.length || !/^\d{4}-\d{2}-\d{2}$/.test(primeiraData)) return;
   const novaData = new Map(rows.map((t, i) => [t.id, addMonths(primeiraData, i)]));
-  save(load().map((t) => (novaData.has(t.id) ? { ...t, data: novaData.get(t.id)! } : t)));
+  save(load().map((t) => (novaData.has(t.id) ? { ...t, data: novaData.get(t.id)!, mesReferencia: novaData.get(t.id)!.slice(0, 7) } : t)));
   if (typeof window !== "undefined") {
-    Promise.all([...novaData].map(([id, data]) => api.updateTransaction(id, { data, date: data })))
+    Promise.all([...novaData].map(([id, data]) => api.updateTransaction(id, { data, date: data, mesReferencia: data.slice(0, 7) })))
       .then(() => { listeners.forEach((l) => l()); })
       .catch((err) => console.warn("Failed to redate plan in SQLite:", err));
   }
@@ -684,7 +759,7 @@ export function saldoTotalComCaixinhas(accountBalance: number, pockets: Caixinha
 
 /** Invoice month that is currently open for a card. */
 export function faturaAberta(c: Cartao, hoje = new Date()) {
-  const d = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() > c.fechamento ? 1 : 0), 1);
+  const d = new Date(hoje.getFullYear(), hoje.getMonth() + (hoje.getDate() >= c.fechamento ? 1 : 0), 1);
   return ym(d.getFullYear(), d.getMonth());
 }
 /** Used limit = open invoice + all future installments on this card. */
@@ -1017,10 +1092,17 @@ export function processarRecorrencias(hoje: Date = new Date()): Transaction[] {
       const targetDay = Math.min(origDay, maxDays);
       const newDate = `${currentYear}-${pad(currentMonth0 + 1)}-${pad(targetDay)}`;
 
+      const subAccount = candidate.account_id ? getTransactionAccount(candidate.account_id) : undefined;
+      const isCard = subAccount?.type === "CREDIT_CARD" || candidate.conta === "Crédito" || Boolean(candidate.cartao);
+      const card = isCard ? (loadCards().find((c) => c.id === (subAccount?.id || candidate.cartao)) ?? loadCards()[0]) : undefined;
+      const closingDay = card?.fechamento ?? 5;
+      const newMesRef = computeTransactionMesReferencia(newDate, isCard ? "CREDIT_CARD" : subAccount?.type, closingDay);
+
       const cloned: Transaction = {
         ...candidate,
         id: Math.random().toString(36).slice(2),
         data: newDate,
+        mesReferencia: newMesRef,
         is_recurring: true,
         is_paid: false,
         parcela: undefined,
@@ -1088,9 +1170,9 @@ export function calcularSaldoAtual(transactions: Transaction[], hojeIso: string 
     .filter((t) => t.data <= hojeIso && !(t.tipo === "despesa" && t.contact_id))
     .reduce((sum, t) => sum + (t.tipo === "receita" ? t.valor : -t.valor), 0);
 }
-/** Transações cuja data pertence ao mês (yyyy-mm). */
+/** Transações cujo mês de referência (ou data) pertence ao mês (yyyy-mm). */
 export function transacoesDoMes(transactions: Transaction[], mes: string): Transaction[] {
-  return transactions.filter((t) => t.data.startsWith(mes));
+  return transactions.filter((t) => (t.mesReferencia || t.data.slice(0, 7)) === mes);
 }
 
 /** Agrupa por dia (data desc). */
