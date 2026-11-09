@@ -5,7 +5,7 @@ export type TxType = "receita" | "despesa";
 export type ExpenseOwner = "Próprio" | "Terceiros";
 export interface Contact { id: string; name: string }
 export type TransactionAccountType = "CREDIT_CARD" | "CHECKING_ACCOUNT";
-export interface TransactionAccount { id: string; name: string; type: TransactionAccountType }
+export interface TransactionAccount { id: string; name: string; type: TransactionAccountType; closing_day?: number }
 export interface Transaction {
   id: string;
   tipo: TxType;
@@ -282,9 +282,9 @@ export function addTransaction(
   const isCreditCard = selectedAccount?.type === "CREDIT_CARD" || t.conta === "Crédito" || Boolean(t.cartao);
 
   const card = isCreditCard
-    ? (loadCards().find((c) => c.id === (selectedAccount?.id || cardId)) ?? loadCards()[0])
+    ? (loadCards().find((c) => c.id === (selectedAccount?.id || cardId) || (selectedAccount?.name && c.nome.toLowerCase() === selectedAccount.name.toLowerCase())) ?? loadCards()[0])
     : undefined;
-  const closingDay = card?.fechamento ?? 5;
+  const closingDay = selectedAccount?.closing_day ?? card?.fechamento ?? 5;
 
   // Strict enforcement: credit cards always use invoice rule; other methods use explicit mesReferencia
   const computedMes = computeTransactionMesReferencia(
@@ -556,8 +556,32 @@ function saveCards(next: Cartao[]) {
 }
 export function upsertCard(c: Omit<Cartao, "id"> & { id?: string }) {
   const cards = loadCards();
-  if (c.id && cards.some((x) => x.id === c.id)) saveCards(cards.map((x) => (x.id === c.id ? { ...x, ...c, id: x.id } : x)));
-  else saveCards([...cards, { ...c, id: c.id ?? Math.random().toString(36).slice(2) }]);
+  const id = c.id ?? Math.random().toString(36).slice(2);
+  const updatedCard: Cartao = { ...c, id };
+  const nextCards = c.id && cards.some((x) => x.id === c.id)
+    ? cards.map((x) => (x.id === c.id ? updatedCard : x))
+    : [...cards, updatedCard];
+  saveCards(nextCards);
+
+  // Sync to TransactionAccount & backend API
+  const currentAccounts = loadTransactionAccounts();
+  const match = currentAccounts.find((a) => a.id === id || a.name.toLowerCase() === c.nome.trim().toLowerCase());
+  const accountId = match?.id || id;
+  const nextAccount: TransactionAccount = {
+    id: accountId,
+    name: c.nome.trim(),
+    type: "CREDIT_CARD",
+    closing_day: c.fechamento,
+  };
+  saveTransactionAccounts([
+    ...currentAccounts.filter((a) => a.id !== accountId),
+    nextAccount,
+  ]);
+
+  if (typeof window !== "undefined") {
+    api.updateAccount(accountId, { name: c.nome.trim(), type: "CREDIT_CARD", closing_day: c.fechamento })
+      .catch(() => api.createAccount({ id: accountId, name: c.nome.trim(), type: "CREDIT_CARD", closing_day: c.fechamento }).catch(() => {}));
+  }
 }
 /** Returns false (and does nothing) when the card still has linked transactions. */
 export function deleteCard(id: string): boolean {
@@ -644,13 +668,20 @@ export function loadTransactionAccounts(): TransactionAccount[] {
     return transactionAccountsCache!;
   })();
   const currentAccounts: TransactionAccount[] = [
-    ...loadCards().map((card) => ({ id: card.id, name: card.nome, type: "CREDIT_CARD" as const })),
+    ...loadCards().map((card) => ({ id: card.id, name: card.nome, type: "CREDIT_CARD" as const, closing_day: card.fechamento })),
     ...loadBankAccounts().map((account) => ({ id: account.id, name: account.nome, type: "CHECKING_ACCOUNT" as const })),
   ];
   const merged = new Map(stored.map((account) => [account.id, account]));
-  currentAccounts.forEach((account) => merged.set(account.id, account));
+  currentAccounts.forEach((account) => {
+    const existing = merged.get(account.id);
+    merged.set(account.id, {
+      ...existing,
+      ...account,
+      closing_day: account.closing_day ?? existing?.closing_day,
+    });
+  });
   const accounts = [...merged.values()];
-  if (accounts.length !== stored.length || accounts.some((account, index) => account.id !== stored[index]?.id || account.name !== stored[index]?.name || account.type !== stored[index]?.type)) {
+  if (accounts.length !== stored.length || accounts.some((account, index) => account.id !== stored[index]?.id || account.name !== stored[index]?.name || account.type !== stored[index]?.type || account.closing_day !== stored[index]?.closing_day)) {
     transactionAccountsCache = accounts;
     localStorage.setItem(TRANSACTION_ACCOUNTS_KEY, JSON.stringify(accounts));
     localStorage.setItem(LEGACY_TRANSACTION_ACCOUNTS_KEY, JSON.stringify(accounts));
@@ -678,10 +709,10 @@ export function upsertTransactionAccount(name: string, type: TransactionAccountT
   }
   const syncedAccounts = loadTransactionAccounts();
   if (!syncedAccounts.some((account) => account.id === id)) {
-    saveTransactionAccounts([...syncedAccounts, { id, name: normalizedName, type }]);
+    saveTransactionAccounts([...syncedAccounts, { id, name: normalizedName, type, closing_day: type === "CREDIT_CARD" ? 5 : undefined }]);
   }
   if (typeof window !== "undefined") {
-    api.createAccount({ id, name: normalizedName, type }).catch(() => {});
+    api.createAccount({ id, name: normalizedName, type, closing_day: type === "CREDIT_CARD" ? 5 : undefined }).catch(() => {});
   }
   return id;
 }
@@ -1170,9 +1201,22 @@ export function calcularSaldoAtual(transactions: Transaction[], hojeIso: string 
     .filter((t) => t.data <= hojeIso && !(t.tipo === "despesa" && t.contact_id))
     .reduce((sum, t) => sum + (t.tipo === "receita" ? t.valor : -t.valor), 0);
 }
+/** Mês de referência efetivo da transação. */
+export function mesReferenciaDe(t: Transaction): string {
+  if (t.mesReferencia) return t.mesReferencia;
+  const account = t.account_id ? getTransactionAccount(t.account_id) : undefined;
+  const isCreditCard = account?.type === "CREDIT_CARD" || t.conta === "Crédito" || Boolean(t.cartao);
+  if (isCreditCard) {
+    const card = loadCards().find((c) => c.id === (t.account_id || t.cartao) || (account?.name && c.nome.toLowerCase() === account.name.toLowerCase()));
+    const closingDay = account?.closing_day ?? card?.fechamento ?? 5;
+    return computeTransactionMesReferencia(t.data, "CREDIT_CARD", closingDay);
+  }
+  return t.data ? t.data.slice(0, 7) : new Date().toISOString().slice(0, 7);
+}
+
 /** Transações cujo mês de referência (ou data) pertence ao mês (yyyy-mm). */
 export function transacoesDoMes(transactions: Transaction[], mes: string): Transaction[] {
-  return transactions.filter((t) => (t.mesReferencia || t.data.slice(0, 7)) === mes);
+  return transactions.filter((t) => mesReferenciaDe(t) === mes);
 }
 
 /** Agrupa por dia (data desc). */
@@ -1231,12 +1275,43 @@ export async function initFinanceApiSync() {
 
     if (Array.isArray(apiAccounts)) {
       const serverAccountIds = new Set(apiAccounts.map((a) => a.id));
-      for (const local of loadTransactionAccounts()) {
-        if (!serverAccountIds.has(local.id)) {
-          await api.createAccount({ id: local.id, name: local.name, type: local.type }).then(() => apiAccounts.push({ id: local.id, name: local.name, type: local.type })).catch(() => {});
+      const localCards = loadCards();
+      let cardsModified = false;
+
+      for (const card of localCards) {
+        const serverAcc = apiAccounts.find((a) => a.id === card.id || a.name.toLowerCase() === card.nome.toLowerCase());
+        if (serverAcc) {
+          if (card.fechamento && serverAcc.closing_day !== card.fechamento) {
+            api.updateAccount(serverAcc.id, { closing_day: card.fechamento }).catch(() => {});
+            serverAcc.closing_day = card.fechamento;
+          } else if (serverAcc.closing_day && !card.fechamento) {
+            card.fechamento = serverAcc.closing_day;
+            cardsModified = true;
+          }
         }
       }
-      transactionAccountsCache = apiAccounts.map((a) => ({ id: a.id, name: a.name, type: a.type }));
+
+      for (const serverAcc of apiAccounts) {
+        if (serverAcc.type === "CREDIT_CARD") {
+          const matchCard = localCards.find((c) => c.id === serverAcc.id || c.nome.toLowerCase() === serverAcc.name.toLowerCase());
+          if (matchCard && serverAcc.closing_day && matchCard.fechamento !== serverAcc.closing_day) {
+            matchCard.fechamento = serverAcc.closing_day;
+            cardsModified = true;
+          }
+        }
+      }
+      if (cardsModified) {
+        saveCards(localCards);
+      }
+
+      for (const local of loadTransactionAccounts()) {
+        if (!serverAccountIds.has(local.id)) {
+          await api.createAccount({ id: local.id, name: local.name, type: local.type, closing_day: local.closing_day })
+            .then(() => apiAccounts.push({ id: local.id, name: local.name, type: local.type, closing_day: local.closing_day }))
+            .catch(() => {});
+        }
+      }
+      transactionAccountsCache = apiAccounts.map((a) => ({ id: a.id, name: a.name, type: a.type, closing_day: a.closing_day }));
       localStorage.setItem(TRANSACTION_ACCOUNTS_KEY, JSON.stringify(transactionAccountsCache));
     }
     if (Array.isArray(apiContacts)) {

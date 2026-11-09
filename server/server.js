@@ -239,6 +239,14 @@ export function createApp(options = {}) {
       );
       const updated = await getAsync('SELECT * FROM accounts WHERE id = ?', [id]);
       if (!updated) return res.status(404).json({ error: 'Account not found' });
+
+      if (cDay != null && updated.type === 'CREDIT_CARD') {
+        const txs = await allAsync('SELECT id, date FROM transactions WHERE account_id = ?', [id]);
+        for (const tx of txs) {
+          const newMes = computeMesReferencia(tx.date, 'CREDIT_CARD', Number(cDay), null);
+          await runAsync('UPDATE transactions SET mesReferencia = ? WHERE id = ?', [newMes, tx.id]);
+        }
+      }
       res.json(updated);
     } catch (err) {
       res.status(500).json({ error: err.message });

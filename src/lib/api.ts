@@ -109,13 +109,13 @@ export const api = {
   async getAccounts(): Promise<ApiAccount[]> {
     return request<ApiAccount[]>('/api/accounts');
   },
-  async createAccount(account: { id?: string; name: string; type: string }): Promise<ApiAccount> {
+  async createAccount(account: { id?: string; name: string; type: string; closing_day?: number }): Promise<ApiAccount> {
     return request<ApiAccount>('/api/accounts', {
       method: 'POST',
       body: JSON.stringify(account),
     });
   },
-  async updateAccount(id: string, account: Partial<ApiAccount>): Promise<ApiAccount> {
+  async updateAccount(id: string, account: Partial<ApiAccount> & { closing_day?: number }): Promise<ApiAccount> {
     return request<ApiAccount>(`/api/accounts/${id}`, {
       method: 'PUT',
       body: JSON.stringify(account),

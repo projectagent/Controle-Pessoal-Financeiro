@@ -13,7 +13,7 @@ import { ContactPicker } from "@/components/ContactPicker";
 import { TransactionAccountPicker } from "@/components/TransactionAccountPicker";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, resumoMensalSeparado, transacoesDoMes, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useCards, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
+import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, getTransactionAccount, resumoMensalSeparado, transacoesDoMes, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useCards, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
 
 export const Route = createFileRoute("/extrato")({
   head: () => ({
@@ -215,8 +215,11 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
   const cards = useCards();
   const accountType = tipoDaContaTransacao(accountId);
   const isCreditCard = accountType === "CREDIT_CARD";
-  const selectedCard = isCreditCard ? cards.find((c) => c.id === accountId) : null;
-  const closingDay = selectedCard?.fechamento ?? 5;
+  const selectedAcc = accountId ? getTransactionAccount(accountId) : null;
+  const selectedCard = isCreditCard
+    ? (cards.find((c) => c.id === accountId || (selectedAcc?.name && c.nome.toLowerCase() === selectedAcc.name.toLowerCase())) ?? null)
+    : null;
+  const closingDay = selectedAcc?.closing_day ?? selectedCard?.fechamento ?? 5;
 
   // Sincroniza mesReferencia com data e fechamento do cartão
   React.useEffect(() => {
@@ -258,7 +261,7 @@ function ManualTransactionDialog({ open, onClose }: { open: boolean; onClose: ()
       conta: isCreditCard ? "Crédito" : "Débito",
       descricao: descricao.trim(),
       data,
-      mesReferencia: isCreditCard ? undefined : mesReferencia,
+      mesReferencia,
       account_id: accountId,
       ...(isCreditCard && accountId ? { cartao: accountId } : {}),
       ...(accountType === "CHECKING_ACCOUNT" && accountId ? { conta_bancaria_id: accountId } : {}),
