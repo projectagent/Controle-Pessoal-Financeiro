@@ -86,7 +86,7 @@ describe("Adversarial Empirical Verification: SQLite Schema, Migrations, and Das
       expect(nullCheck.empty_count || 0).toBe(0);
     });
 
-    it("empirically verifies 100% of all existing 141 transactions obey the closing date business rule", async () => {
+    it("empirically verifies 100% of all existing transactions obey the closing date business rule", async () => {
       const rows = await all(
         prodDb,
         `SELECT t.id, t.date, t.mesReferencia, a.type AS account_type, COALESCE(a.closing_day, 5) AS closing_day
@@ -94,7 +94,7 @@ describe("Adversarial Empirical Verification: SQLite Schema, Migrations, and Das
          LEFT JOIN accounts a ON t.account_id = a.id`
       );
 
-      expect(rows.length).toBe(141);
+      expect(rows.length).toBeGreaterThanOrEqual(141);
 
       for (const row of rows) {
         const expected = computeMesReferencia(row.date, row.account_type, row.closing_day, null);

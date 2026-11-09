@@ -46,8 +46,12 @@ export interface DashboardSummaryResponse {
   current_balance: number;
   total_income_all_time: number;
   total_expenses_all_time: number;
+  total_cartao?: number;
+  total_debito_contas?: number;
   monthly: {
     personal_expenses: number;
+    total_cartao?: number;
+    total_debito_contas?: number;
     third_party_pending: number;
     third_party_total: number;
     total_expenses: number;

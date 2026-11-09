@@ -316,13 +316,18 @@ describe("Genuine Express and SQLite Backend API Integration", () => {
   describe("GET /api/dashboard/summary — Aggregation Verification", () => {
     it("calculates personal expenses and category breakdowns strictly by mesReferencia", async () => {
       // November summary must include tx_on (200), tx_after (450), tx_checking_explicit (1200), batch_2 (75) = 1925
-      const { status, body } = await apiRequest("/api/dashboard/summary", {
+      const { status, body } = await apiRequest<any>("/api/dashboard/summary", {
         query: { month: "2026-11" },
       });
 
       expect(status).toBe(200);
       expect(body.month).toBe("2026-11");
       expect(body.monthly.personal_expenses).toBe(1925);
+      expect(body.monthly.total_cartao).toBe(725);
+      expect(body.monthly.total_debito_contas).toBe(1200);
+      expect(body.monthly.total_cartao + body.monthly.total_debito_contas).toBe(body.monthly.personal_expenses);
+      expect(body.total_cartao).toBe(725);
+      expect(body.total_debito_contas).toBe(1200);
 
       // Verify category breakdown
       const comprasCat = body.categories.find((c: any) => c.category === "Compras");
@@ -335,13 +340,64 @@ describe("Genuine Express and SQLite Backend API Integration", () => {
     });
 
     it("excludes next-month credit card purchases from the current month summary", async () => {
-      const { status, body } = await apiRequest("/api/dashboard/summary", {
+      const { status, body } = await apiRequest<any>("/api/dashboard/summary", {
         query: { month: "2026-10" },
       });
 
       expect(status).toBe(200);
       // October includes tx_before (150), tx_checking_default (85), batch_1 (50) = 285
       expect(body.monthly.personal_expenses).toBe(285);
+      expect(body.monthly.total_cartao).toBe(200);
+      expect(body.monthly.total_debito_contas).toBe(85);
+      expect(body.monthly.total_cartao + body.monthly.total_debito_contas).toBe(body.monthly.personal_expenses);
+    });
+
+    it("segregates credit card vs debit/account expenses and guarantees invariant with unlinked accounts and third parties", async () => {
+      try {
+        // Insert isolated test data for 2028-05:
+        // 1. Credit card personal expense: 350
+        await runSql(`
+          INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, account_id)
+          VALUES ('tx_seg_card', 'despesa', 350, 'Mercado Cartão', 'Alimentação', '2028-05-02', '2028-05', 'card_nubank')
+        `);
+
+        // 2. Checking account personal expense: 120
+        await runSql(`
+          INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, account_id)
+          VALUES ('tx_seg_bank', 'despesa', 120, 'Almoço Débito', 'Alimentação', '2028-05-03', '2028-05', 'acc_itau')
+        `);
+
+        // 3. Unlinked (null account_id) personal expense (e.g. cash, consórcio, Pix): 80
+        await runSql(`
+          INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, account_id)
+          VALUES ('tx_seg_cash', 'despesa', 80, 'Padaria Dinheiro', 'Alimentação', '2028-05-04', '2028-05', NULL)
+        `);
+
+        // 4. Third-party expense on credit card: 500 (should NOT count in personal_expenses, total_cartao, or total_debito_contas)
+        await runSql(`
+          INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, account_id, contact_id, is_paid)
+          VALUES ('tx_seg_third', 'despesa', 500, 'Presente Terceiro', 'Outros', '2028-05-05', '2028-05', 'card_nubank', 'contact_joao', 0)
+        `);
+
+        const { status, body } = await apiRequest<any>("/api/dashboard/summary", {
+          query: { month: "2028-05" },
+        });
+
+        expect(status).toBe(200);
+        expect(body.month).toBe("2028-05");
+        // Personal expenses: 350 + 120 + 80 = 550 (excludes 500 third-party)
+        expect(body.monthly.personal_expenses).toBe(550);
+        // Credit card: 350
+        expect(body.monthly.total_cartao).toBe(350);
+        // Debit/Accounts/Cash: 120 + 80 = 200
+        expect(body.monthly.total_debito_contas).toBe(200);
+        // Mathematical invariant: personal_expenses === total_cartao + total_debito_contas
+        expect(body.monthly.total_cartao + body.monthly.total_debito_contas).toBe(body.monthly.personal_expenses);
+        // Third-party pending correctly captures 500
+        expect(body.monthly.third_party_pending).toBe(500);
+      } finally {
+        await runSql("DELETE FROM transactions WHERE id IN ('tx_seg_card', 'tx_seg_bank', 'tx_seg_cash', 'tx_seg_third')");
+      }
     });
   });
 

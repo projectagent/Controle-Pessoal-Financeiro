@@ -636,17 +636,22 @@ export function createApp(options = {}) {
         `
         SELECT
           -- Personal expenses (contact_id IS NULL)
-          COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NULL THEN amount ELSE 0 END), 0) AS personal_expenses,
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') AND t.contact_id IS NULL THEN t.amount ELSE 0 END), 0) AS personal_expenses,
+          -- Total Cartão (Personal expenses on credit card)
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') AND t.contact_id IS NULL AND a.type = 'CREDIT_CARD' THEN t.amount ELSE 0 END), 0) AS total_cartao,
+          -- Total Débito/Contas (Personal expenses on checking accounts, cash, or unlinked)
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') AND t.contact_id IS NULL AND COALESCE(a.type, '') != 'CREDIT_CARD' THEN t.amount ELSE 0 END), 0) AS total_debito_contas,
           -- Third party pending
-          COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NOT NULL AND is_paid = 0 THEN amount ELSE 0 END), 0) AS third_party_pending,
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') AND t.contact_id IS NOT NULL AND t.is_paid = 0 THEN t.amount ELSE 0 END), 0) AS third_party_pending,
           -- Third party total (pending + paid)
-          COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') AND contact_id IS NOT NULL THEN amount ELSE 0 END), 0) AS third_party_total,
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') AND t.contact_id IS NOT NULL THEN t.amount ELSE 0 END), 0) AS third_party_total,
           -- Total expenses (personal + third party)
-          COALESCE(SUM(CASE WHEN (type = 'despesa' OR type = 'EXPENSE') THEN amount ELSE 0 END), 0) AS total_expenses,
+          COALESCE(SUM(CASE WHEN (t.type = 'despesa' OR t.type = 'EXPENSE') THEN t.amount ELSE 0 END), 0) AS total_expenses,
           -- Total income this month
-          COALESCE(SUM(CASE WHEN (type = 'receita' OR type = 'INCOME') THEN amount ELSE 0 END), 0) AS total_income
-        FROM transactions
-        WHERE mesReferencia = ?
+          COALESCE(SUM(CASE WHEN (t.type = 'receita' OR t.type = 'INCOME') THEN t.amount ELSE 0 END), 0) AS total_income
+        FROM transactions t
+        LEFT JOIN accounts a ON t.account_id = a.id
+        WHERE t.mesReferencia = ?
       `,
         [month]
       );
@@ -681,8 +686,12 @@ export function createApp(options = {}) {
         current_balance: Number(balanceResult.current_balance || 0),
         total_income_all_time: Number(balanceResult.total_income_all_time || 0),
         total_expenses_all_time: Number(balanceResult.total_expenses_all_time || 0),
+        total_cartao: Number(monthlyResult.total_cartao || 0),
+        total_debito_contas: Number(monthlyResult.total_debito_contas || 0),
         monthly: {
           personal_expenses: Number(monthlyResult.personal_expenses || 0),
+          total_cartao: Number(monthlyResult.total_cartao || 0),
+          total_debito_contas: Number(monthlyResult.total_debito_contas || 0),
           third_party_pending: Number(monthlyResult.third_party_pending || 0),
           third_party_total: Number(monthlyResult.third_party_total || 0),
           total_expenses: Number(monthlyResult.total_expenses || 0),

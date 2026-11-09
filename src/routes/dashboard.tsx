@@ -12,6 +12,7 @@ import {
   brl,
   calcularSaldoAtual,
   deslocarMes,
+  getTransactionAccount,
   transacoesDoMes,
   updateMonthlySpendingLimit,
   useDashboardSummary,
@@ -80,6 +81,27 @@ function Dashboard() {
     ? sqlSummary.monthly.personal_expenses
     : despesasPessoais.reduce((s, t) => s + t.valor, 0);
 
+  const isCartao = (t: (typeof despesasPessoais)[number]) => {
+    const acc = t.account_id ? getTransactionAccount(t.account_id) : undefined;
+    return acc?.type === "CREDIT_CARD" || t.conta === "Crédito" || Boolean(t.cartao);
+  };
+
+  const despesasCartaoClient = despesasPessoais
+    .filter((t) => isCartao(t))
+    .reduce((s, t) => s + t.valor, 0);
+
+  const despesasDebitoClient = despesasPessoais
+    .filter((t) => !isCartao(t))
+    .reduce((s, t) => s + t.valor, 0);
+
+  const despesasCartao = isSqlSynced && sqlSummary?.monthly?.total_cartao !== undefined
+    ? Number(sqlSummary.monthly.total_cartao)
+    : despesasCartaoClient;
+
+  const despesasDebitoContas = isSqlSynced && sqlSummary?.monthly?.total_debito_contas !== undefined
+    ? Number(sqlSummary.monthly.total_debito_contas)
+    : despesasDebitoClient;
+
   // 4. Repasse de Terceiros: valor mensal (do mês selecionado) e valor total acumulado (geral)
   const aReceberMes = isSqlSynced && sqlSummary?.monthly?.third_party_pending !== undefined
     ? Number(sqlSummary.monthly.third_party_pending)
@@ -142,12 +164,24 @@ function Dashboard() {
     value: number;
     secondaryLabel?: string;
     secondaryValue?: number;
+    secondaryText?: string;
+    details?: { cartao: number; debito: number };
     icon: typeof Wallet;
     cls: string;
   }> = [
     { label: "Saldo Atual", value: saldo, icon: Wallet, cls: "text-foreground" },
     { label: "Receitas do Mês", value: receitas, icon: ArrowUpRight, cls: "text-income" },
-    { label: "Despesas do Mês", value: despesas, icon: ArrowDownRight, cls: "text-expense" },
+    {
+      label: "Despesas do Mês",
+      value: despesas,
+      secondaryText: `${brl(despesasCartao)} no Crédito | ${brl(despesasDebitoContas)} no Débito/Pix`,
+      details: {
+        cartao: despesasCartao,
+        debito: despesasDebitoContas,
+      },
+      icon: ArrowDownRight,
+      cls: "text-expense",
+    },
     {
       label: "Repasse de Terceiros (Mês)",
       value: aReceberMes,
@@ -187,13 +221,21 @@ function Dashboard() {
 
       {/* Summary Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map(({ label, value, secondaryLabel, secondaryValue, icon: Icon, cls }) => (
+        {cards.map(({ label, value, secondaryLabel, secondaryValue, secondaryText, icon: Icon, cls }) => (
           <div key={label} className="rounded-xl border border-border bg-card p-5">
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               {label}
               <Icon className={`size-4 ${cls}`} />
             </div>
             <p className={`mt-3 font-display text-2xl font-semibold tabular-nums ${cls}`}>{brl(value)}</p>
+            {secondaryText && (
+              <div
+                className="mt-2 flex items-center justify-between border-t border-border/60 pt-2 text-xs text-muted-foreground"
+                data-testid="despesas-detalhes"
+              >
+                <span>{secondaryText}</span>
+              </div>
+            )}
             {secondaryLabel && secondaryValue !== undefined && (
               <div className="mt-2 flex items-center justify-between border-t border-border/60 pt-2 text-xs text-muted-foreground">
                 <span>{secondaryLabel}</span>
