@@ -13,7 +13,7 @@ import { ContactPicker } from "@/components/ContactPicker";
 import { TransactionAccountPicker } from "@/components/TransactionAccountPicker";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, getTransactionAccount, resumoMensalSeparado, transacoesDoMes, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useCards, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
+import { addTransaction, agruparPorDia, anteciparParcelas, brl, deslocarMes, getTransactionAccount, initFinanceApiSync, resumoMensalSeparado, transacoesDoMes, useDashboardSummary, ym, cancelarRenovacaoAssinatura, CATEGORIAS, reativarRenovacaoAssinatura, removeTransaction, removeTransactionsByInstallmentGroupId, tipoDaContaTransacao, toggleTransactionPaid, useCards, useContacts, useTransactionAccounts, useTransactions, type Transaction, type TxType } from "@/lib/finance";
 
 export const Route = createFileRoute("/extrato")({
   head: () => ({
@@ -45,6 +45,13 @@ function Extrato() {
   });
   const dias = agruparPorDia(visibleTxs);
   const resumo = resumoMensalSeparado(transacoesDoMes(txs, mes));
+  const { summary: sqlSummary } = useDashboardSummary(mes);
+  const isSqlSynced = sqlSummary?.month === mes;
+
+  React.useEffect(() => {
+    initFinanceApiSync();
+  }, [mes]);
+
   const [anoSel, mesSel] = mes.split("-").map(Number) as [number, number];
   const mesLabel = new Date(anoSel, mesSel - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
   const mesTitulo = `${mesLabel.charAt(0).toUpperCase()}${mesLabel.slice(1)} ${anoSel}`;
@@ -63,6 +70,13 @@ function Extrato() {
     setTxToDelete(null);
   };
 
+  const totalGastosMes = isSqlSynced ? sqlSummary.monthly.personal_expenses : resumo.gastos;
+  const aReceberMes = isSqlSynced && sqlSummary.monthly.third_party_pending !== undefined
+    ? Number(sqlSummary.monthly.third_party_pending)
+    : resumo.aReceber;
+  const totalGastoGeral = isSqlSynced ? sqlSummary.monthly.total_expenses : resumo.totalGasto;
+  const totalEntradas = isSqlSynced ? sqlSummary.monthly.total_income : resumo.entradas;
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-4 md:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -75,10 +89,10 @@ function Extrato() {
         <Button variant="ghost" size="icon" aria-label="Próximo mês" onClick={() => setMes((m) => deslocarMes(m, 1))}><ChevronRight className="size-5" /></Button>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Total Gastos Mês</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-expense">{brl(resumo.gastos)}</p><p className="mt-0.5 text-xs text-muted-foreground">Somente despesas suas</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">A Receber (Terceiros)</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-orange-400">{brl(resumo.aReceber)}</p><p className="mt-0.5 text-xs text-muted-foreground">Pendentes de repasse</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Total Gasto (Geral)</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-foreground">{brl(resumo.totalGasto)}</p><p className="mt-0.5 text-xs text-muted-foreground">Seus gastos + repasse de terceiros</p></div>
-        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Entradas</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-income">{brl(resumo.entradas)}</p><p className="mt-0.5 text-xs text-muted-foreground">Receitas do mês</p></div>
+        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Total Gastos Mês</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-expense">{brl(totalGastosMes)}</p><p className="mt-0.5 text-xs text-muted-foreground">Somente despesas suas</p></div>
+        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">A Receber (Terceiros)</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-orange-400">{brl(aReceberMes)}</p><p className="mt-0.5 text-xs text-muted-foreground">Pendentes de repasse</p></div>
+        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Total Gasto (Geral)</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-foreground">{brl(totalGastoGeral)}</p><p className="mt-0.5 text-xs text-muted-foreground">Seus gastos + repasse de terceiros</p></div>
+        <div className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">Entradas</p><p className="mt-1 font-display text-xl font-semibold tabular-nums text-income">{brl(totalEntradas)}</p><p className="mt-0.5 text-xs text-muted-foreground">Receitas do mês</p></div>
       </div>
       <Tabs value={filter} onValueChange={(value) => setFilter(value as typeof filter)}>
         <TabsList>
@@ -101,8 +115,8 @@ function Extrato() {
       ) : (
         <div className="space-y-6">
           {dias.map(({ data, items }) => {
-            const [, mm, dd] = data.split("-").map(Number) as [number, number, number];
-            const nomeMes = new Date(anoSel, mm - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
+            const [yy, mm, dd] = data.split("-").map(Number) as [number, number, number];
+            const nomeMes = new Date(yy, mm - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
             return (
               <section key={data}>
                 <h3 className="mb-2 text-sm font-medium text-muted-foreground">{dd} de {nomeMes.charAt(0).toUpperCase()}{nomeMes.slice(1)}</h3>

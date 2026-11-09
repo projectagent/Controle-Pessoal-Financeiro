@@ -124,6 +124,7 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
   useEffect(() => {
+    initFinanceApiSync();
     processarRecorrencias();
   }, []);
 

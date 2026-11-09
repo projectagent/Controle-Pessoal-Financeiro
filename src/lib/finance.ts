@@ -1147,6 +1147,9 @@ export function processarRecorrencias(hoje: Date = new Date()): Transaction[] {
 
   if (toClone.length > 0) {
     save([...toClone, ...allTxs]);
+    if (typeof window !== "undefined") {
+      api.createTransactions(toClone).catch((err) => console.warn("Failed to sync cloned recurring to SQLite:", err));
+    }
   }
 
   return toClone;
@@ -1327,7 +1330,15 @@ export async function initFinanceApiSync() {
     listeners.forEach((l) => l());
 
     // Process recurring subscriptions from previous month on the server
-    await api.processRecurring().catch(() => {});
+    const recurResult = await api.processRecurring().catch(() => null);
+    if (recurResult && Array.isArray((recurResult as any).items) && (recurResult as any).items.length > 0) {
+      const refreshedTxs = await api.getTransactions().catch(() => null);
+      if (Array.isArray(refreshedTxs)) {
+        cache = refreshedTxs as unknown as Transaction[];
+        localStorage.setItem(KEY, JSON.stringify(cache));
+        listeners.forEach((l) => l());
+      }
+    }
   } catch (err) {
     console.warn("Could not sync with SQLite API (offline or not reachable):", err);
   }
