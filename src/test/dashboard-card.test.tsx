@@ -4,7 +4,9 @@ import { Route as DashboardRoute } from "@/routes/dashboard";
 import { api, type DashboardSummaryResponse } from "@/lib/api";
 import {
   addTransaction,
+  toggleTransactionPaid,
   upsertTransactionAccount,
+  useTransactions,
   zerarAplicativo,
 } from "@/lib/finance";
 
@@ -293,5 +295,85 @@ describe("Dashboard — Despesas do Mês Card Breakdown (R1 & R2)", () => {
     expect(screen.getByText("Receitas do Mês")).toBeInTheDocument();
     expect(screen.getByText("Repasse de Terceiros (Mês)")).toBeInTheDocument();
     expect(screen.getByText("Total acumulado")).toBeInTheDocument();
+  });
+
+  it("keeps Saldo Atual, Receitas do Mês, and Despesas do Mês completely invariant when toggling is_paid (checkbox)", async () => {
+    vi.spyOn(api, "getDashboardSummary").mockRejectedValue(new Error("Offline fallback"));
+
+    const bankId = upsertTransactionAccount("Conta Principal", "CHECKING_ACCOUNT")!;
+
+    // 1. Income (unpaid initially, future date in current month)
+    addTransaction({
+      tipo: "receita",
+      valor: 5000,
+      categoria: "Salário",
+      conta: "Débito",
+      descricao: "Salário Mensal",
+      data: "2026-11-25",
+      mesReferencia: "2026-11",
+      account_id: bankId,
+      expense_owner: "Próprio",
+      is_paid: false,
+    });
+
+    // 2. Personal expense 1 (unpaid initially, future date in current month)
+    addTransaction({
+      tipo: "despesa",
+      valor: 1200,
+      categoria: "Moradia",
+      conta: "Débito",
+      descricao: "Aluguel",
+      data: "2026-11-20",
+      mesReferencia: "2026-11",
+      account_id: bankId,
+      expense_owner: "Próprio",
+      is_paid: false,
+    });
+
+    // 3. Personal expense 2 (already paid)
+    addTransaction({
+      tipo: "despesa",
+      valor: 552.23,
+      categoria: "Consórcio",
+      conta: "Débito",
+      descricao: "Consórcio",
+      data: "2026-11-10",
+      mesReferencia: "2026-11",
+      account_id: bankId,
+      expense_owner: "Próprio",
+      is_paid: true,
+    });
+
+    const DashboardComponent = DashboardRoute.options.component!;
+    render(<DashboardComponent />);
+
+    const saldoCard = screen.getByText("Saldo Atual").closest("div.rounded-xl")!;
+    const receitasCard = screen.getByText("Receitas do Mês").closest("div.rounded-xl")!;
+    const despesasCard = screen.getByText("Despesas do Mês").closest("div.rounded-xl")!;
+
+    // Expected:
+    // Receitas do Mês = 5.000,00
+    // Despesas do Mês = 1.200,00 + 552,23 = 1.752,23
+    // Saldo Atual = 5.000,00 - 1.752,23 = 3.247,77
+    await waitFor(() => {
+      expect(within(receitasCard).getByText(/5\.000,00/)).toBeInTheDocument();
+      expect(norm(despesasCard.querySelector("p.font-display")?.textContent)).toBe("R$ 1.752,23");
+      expect(within(saldoCard).getByText(/3\.247,77/)).toBeInTheDocument();
+    });
+
+    // Toggle is_paid on all transactions (simulating checking/unchecking in Extrato)
+    const rawStored = JSON.parse(localStorage.getItem("fin-transactions-v1") || "[]");
+    expect(rawStored.length).toBe(3);
+
+    await act(async () => {
+      for (const tx of rawStored) {
+        toggleTransactionPaid(tx.id);
+      }
+    });
+
+    // Values MUST remain 100% unchanged after toggling is_paid!
+    expect(within(receitasCard).getByText(/5\.000,00/)).toBeInTheDocument();
+    expect(norm(despesasCard.querySelector("p.font-display")?.textContent)).toBe("R$ 1.752,23");
+    expect(within(saldoCard).getByText(/3\.247,77/)).toBeInTheDocument();
   });
 });

@@ -399,6 +399,47 @@ describe("Genuine Express and SQLite Backend API Integration", () => {
         await runSql("DELETE FROM transactions WHERE id IN ('tx_seg_card', 'tx_seg_bank', 'tx_seg_cash', 'tx_seg_third')");
       }
     });
+
+    it("keeps personal_expenses, total_income, and current_balance invariant when toggling is_paid via PUT or PATCH", async () => {
+      try {
+        await runSql(`
+          INSERT INTO transactions (id, type, amount, description, category, date, mesReferencia, account_id, is_paid)
+          VALUES
+            ('tx_inv_inc', 'receita', 4500, 'Salário', 'Salário', '2028-06-25', '2028-06', 'acc_itau', 0),
+            ('tx_inv_exp1', 'despesa', 1200, 'Aluguel', 'Moradia', '2028-06-20', '2028-06', 'acc_itau', 0),
+            ('tx_inv_exp2', 'despesa', 550, 'Consórcio', 'Consórcio', '2028-05-10', '2028-06', 'card_nubank', 0)
+        `);
+
+        const before = await apiRequest<any>("/api/dashboard/summary", { query: { month: "2028-06" } });
+        expect(before.status).toBe(200);
+        expect(before.body.monthly.total_income).toBe(4500);
+        expect(before.body.monthly.personal_expenses).toBe(1750);
+        expect(before.body.monthly.balance).toBe(2750);
+        expect(before.body.current_balance).toBe(2750);
+
+        // Mark tx_inv_exp1 and tx_inv_exp2 as paid via PUT (as updateTransaction does) and PATCH
+        await apiRequest("/api/transactions/tx_inv_exp1", {
+          method: "PUT",
+          body: { is_paid: true },
+        });
+        await apiRequest("/api/transactions/tx_inv_exp2", {
+          method: "PUT",
+          body: { is_paid: true },
+        });
+        await apiRequest("/api/transactions/tx_inv_inc/toggle-paid", {
+          method: "PATCH",
+        });
+
+        const after = await apiRequest<any>("/api/dashboard/summary", { query: { month: "2028-06" } });
+        expect(after.status).toBe(200);
+        expect(after.body.monthly.total_income).toBe(4500);
+        expect(after.body.monthly.personal_expenses).toBe(1750);
+        expect(after.body.monthly.balance).toBe(2750);
+        expect(after.body.current_balance).toBe(2750);
+      } finally {
+        await runSql("DELETE FROM transactions WHERE id IN ('tx_inv_inc', 'tx_inv_exp1', 'tx_inv_exp2')");
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

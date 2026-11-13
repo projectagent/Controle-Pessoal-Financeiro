@@ -64,22 +64,22 @@ function Dashboard() {
   const mesLabel = new Date(anoSel, mesSel - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
   const mesTitulo = `${mesLabel.charAt(0).toUpperCase()}${mesLabel.slice(1)} ${anoSel}`;
 
-  // Strict monthly isolation for transactions
+  // Strict monthly isolation for transactions (based on mesReferencia, ignoring is_paid)
   const doMes = transacoesDoMes(txs, mes);
 
-  // 1. Saldo Atual: evaluates all realized cash flow to date (excludes future installments)
-  const saldo = isSqlSynced ? sqlSummary.current_balance : calcularSaldoAtual(txs, hojeIso);
-
-  // 2. Receitas do Mês: strictly within selected month
+  // 1. Receitas do Mês: sums all income in the selected month (mesReferencia), ignoring is_paid
   const receitas = isSqlSynced
-    ? sqlSummary.monthly.total_income
+    ? Number(sqlSummary.monthly.total_income || 0)
     : doMes.filter((t) => t.tipo === "receita").reduce((s, t) => s + t.valor, 0);
 
-  // 3. Despesas do Mês: personal expenses strictly within selected month (never includes third party)
+  // 2. Despesas do Mês: sums all personal expenses in the selected month (mesReferencia), ignoring is_paid
   const despesasPessoais = doMes.filter((t) => t.tipo === "despesa" && !t.contact_id);
   const despesas = isSqlSynced
-    ? sqlSummary.monthly.personal_expenses
+    ? Number(sqlSummary.monthly.personal_expenses || 0)
     : despesasPessoais.reduce((s, t) => s + t.valor, 0);
+
+  // 3. Saldo Atual: direct result of (Receitas Totais do Mês - Despesas Totais do Mês), completely decoupled from checkbox status (is_paid)
+  const saldo = receitas - despesas;
 
   const isCartao = (t: (typeof despesasPessoais)[number]) => {
     const acc = t.account_id ? getTransactionAccount(t.account_id) : undefined;
